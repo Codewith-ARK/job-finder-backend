@@ -86,6 +86,8 @@ Open `http://localhost:3000`. All demo accounts use the password **`Demo1234!`**
 
 **Expected:** the interface stays usable on mobile, keyboard navigation works, and API failures are visible rather than silently replaced.
 
+For rendered system and workflow diagrams, see [FLOWS.md](FLOWS.md).
+
 ## Resetting the local demo
 
 The local database is `backend/data/jobfinder.db`. To reset demo data, stop the API and delete that file, then run:
