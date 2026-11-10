@@ -65,6 +65,6 @@ All routes use the `/api` prefix and FastAPI's `{"detail": "..."}` error shape. 
 
 ## Documentation and verification
 
-Start with [START_HERE](docs/START_HERE.md), then [agent rules](AGENTS.md), [architecture](docs/ARCHITECTURE.md), and [plan](docs/PLAN.md).
+Start with [START_HERE](docs/START_HERE.md), then [agent rules](AGENTS.md), [architecture](docs/ARCHITECTURE.md), [plan](docs/PLAN.md), and the [manual testing guide](docs/MANUAL_TESTING.md).
 
 For connection failures inspect configuration and service health; do not delete volumes as a troubleshooting shortcut. Run migrations against an empty database when schema changes are made, and never rewrite applied migrations.
