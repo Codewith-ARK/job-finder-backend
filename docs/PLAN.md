@@ -2,9 +2,11 @@
 
 **Decision confirmed:** visualize the complete application workflow with mock data first; connect real APIs feature by feature afterward. Architecture v0.2 remains approved. Assign a task or explicit sequence; this document does not start implementation automatically.
 
+**Delivery status (10 November 2026):** T00–T06 complete. All documented features are implemented and verified locally. Remaining: owner manual acceptance, Docker/PostgreSQL execution, and deployment hardening (secure cookies, disable demo sign-in and startup seeding).
+
 ## T00 — First-run inspection and local instructions
 
-**Ready. Scope:** read both repos; edit only README files, repository CONTEXT files, the Observed conventions sections of repository AGENTS files, and this task's status. Root fixed rules and application/configuration files stay unchanged.
+**Done. Scope:** read both repos; edit only README files, repository CONTEXT files, the Observed conventions sections of repository AGENTS files, and this task's status. Root fixed rules and application/configuration files stay unchanged.
 
 Read root/scoped instructions first. Inspect manifests, lockfiles, actual folders, existing utilities, safe environment examples, and Git status. Verify available non-destructive startup/check commands. Do not install packages, regenerate lockfiles, edit secrets, or modify source code to complete the audit.
 
@@ -12,13 +14,15 @@ Read root/scoped instructions first. Inspect manifests, lockfiles, actual folder
 
 ## T01 — Frontend foundation for mock workflows
 
-**Next after T00; assign explicitly. Scope:** frontend layouts, providers, shared UI, Query/Axios configuration, mock infrastructure, and relevant checks. Backend edits are excluded.
+**Done. Scope:** frontend layouts, providers, shared UI, Query/Axios configuration, mock infrastructure, and relevant checks. Backend edits are excluded.
 
 Create navigation and workspace shells, one stable QueryClient, and explicit development mock adapters behind feature API functions. Keep marketing independent. Use coherent shared mock state; keep feature-specific fixtures with their feature. No backend connection is required to demonstrate mock-only screens.
 
 **Done:** navigation works; mock mode is visibly identified; relevant checks pass; UI does not issue unnecessary real requests.
 
 ## T02 — Complete the mock UI milestone
+
+**Done:** T02.1–T02.4 completed the mock UI milestone, then the authorized T03–T06 sequence connected the real APIs.
 
 This is a sequence of small tasks, not one unrestricted edit. Give each subtask exact allowed files and acceptance checks before coding.
 

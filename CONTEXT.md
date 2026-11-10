@@ -8,7 +8,7 @@ FastAPI will own identity, sessions, agency/role/record permissions, validated c
 
 Backend documentation preserves these boundaries during UI work. It does not instruct the agent to implement every backend feature immediately. Inspect and document the existing baseline now; retain it while the mock UI is developed.
 
-## Later sequence
+## Planned sequence (completed)
 
 1. Review the UI workflow and resolve relevant product/permission rules.
 2. Establish missing database/Compose/migration foundations without replacing working setup.

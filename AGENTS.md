@@ -1,6 +1,6 @@
 # Backend agent rules
 
-Applies to this repository. Read workspace `../AGENTS.md`, this file, `CONTEXT.md`, `README.md`, `docs/ARCHITECTURE.md`, and the assigned task in `docs/PLAN.md`. Architecture v0.2 is approved. **Current priority is mock frontend workflows; do not start backend features merely because their documentation exists.**
+Applies to this repository. Read workspace `../AGENTS.md`, this file, `CONTEXT.md`, `README.md`, `docs/ARCHITECTURE.md`, and the assigned task in `docs/PLAN.md`. Architecture v0.2 is approved. **The UI-first milestone and real feature integration are complete; remaining work is manual acceptance, deployment verification, and hardening.**
 
 ## Scope
 
