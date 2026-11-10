@@ -1,8 +1,5 @@
-from fastapi import FastAPI
+"""ASGI entry point for `uv run fastapi dev main.py` and uvicorn."""
 
-app = FastAPI()
+from app.main import app
 
-
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
+__all__ = ["app"]

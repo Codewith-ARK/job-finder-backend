@@ -35,17 +35,25 @@ Scope each subtask to its frontend feature, routes, mock records, and related ch
 
 ## T03 — Workflow review and contracts
 
+**Done:** the owner authorized autonomous delivery. Decisions are recorded in [EXECUTION.md](EXECUTION.md) instead of a review meeting.
+
 Review the UI with the owner. Record accepted behavior, remaining changes, API shapes, and the role/agency permission matrix required for the next implementation. Mock assumptions must not silently become backend policy.
 
 ## T04 — Missing backend foundations
+
+**Done:** settings, database sessions, health, Alembic migration, seed, Compose, and Dockerfile are implemented. SQLite verification passed; the PostgreSQL container path is unexecuted locally.
 
 After workflow review, scope API/PostgreSQL Compose, settings, database sessions, health/readiness, and Alembic configuration/migrations as needed. Preserve working setup. Verify startup, disposable-database migrations, and persistence. Add no speculative domain tables or extra services.
 
 ## T05 — Real authentication
 
+**Done:** cookie sessions, hashed tokens, CSRF/origin enforcement, password changes, logout, revocation, and frontend auth screens are connected and tested.
+
 Define session lifecycle, CSRF protection, and permissions, then implement backend session operations and frontend integration. Verify logout/expiry, unauthenticated denial, wrong-role/record access, and agency isolation. Mock role switching must not affect real authorization.
 
 ## T06.<scope> — One feature migration
+
+**Done:** candidate, staff, jobs/applications, and platform APIs are connected; runtime mocks were removed and the full workflow was smoke-tested. See repository CONTEXT files for evidence.
 
 For each assigned feature:
 

@@ -46,8 +46,11 @@ Reviewed workflows and contracts guide implementation; mock role behavior is not
 
 ## Observed conventions — agent maintained
 
-- `pyproject.toml` requires Python `>=3.14`; `.python-version` contains `3.14`; `uv.lock` is present; uv `0.12.9` and Python `3.14.5` are installed, with a local `.venv` present.
-- The current application is a minimal FastAPI scaffold: root `main.py` exposes `app = FastAPI()` and only `GET /` returning `{"Hello": "World"}`. `src/app/__init__.py` only exposes the sample `app` console function.
-- The only declared runtime dependency is `fastapi[standard]`; the project script `app` runs `app:main` and prints the sample greeting. No SQLAlchemy, PostgreSQL, Alembic, controller/service/model/schema, or test implementation is present.
-- No `compose.yaml`/`docker-compose.yml`, `.env.example`, database configuration, migration directory, lint configuration, or test configuration is present. Docker is not installed on the current PATH.
-- Verified non-destructive commands are `uv run app`, `uv run fastapi dev main.py`, and an in-process FastAPI `TestClient` health check. The FastAPI CLI needs `PYTHONUTF8=1` in this PowerShell console to avoid a help-output encoding error. Pytest is not installed.
+- `pyproject.toml` requires Python `>=3.14`; `.python-version` contains `3.14`; `uv.lock` is present; uv `0.12.9` and Python `3.14.5` are installed with a local `.venv`.
+- Application code lives in `src/app/`: `main.py` builds the FastAPI app, `config.py` uses pydantic-settings, `database.py` owns the engine/session/`Base`, and `models/`, `schemas/`, `services/`, `controllers/` follow the fixed MVC boundary. Root `main.py` only re-exports `app` for `fastapi dev main.py` and uvicorn.
+- Runtime dependencies are FastAPI, SQLAlchemy 2.x, Alembic, psycopg, pwdlib/Argon2, python-multipart, and email-validator. Dev dependencies are pytest and ruff.
+- `compose.yaml` runs PostgreSQL 17 and the API with persistent database/document volumes; the Dockerfile runs `alembic upgrade head` before uvicorn. Docker is not installed locally, so the PostgreSQL container path is unverified; local runs use SQLite through the same `DATABASE_URL` setting.
+- Alembic has one initial migration under `alembic/versions/`; `uv run alembic upgrade head` applies it. `uv run seed` is idempotent and skips non-empty databases. Startup seeding is controlled by `SEED_ON_STARTUP`.
+- Sessions use sync SQLAlchemy request-scoped sessions (`get_db`), with services owning commits. Domain failures raise `ServiceError` subclasses and are rendered as FastAPI `{"detail": ...}` responses by a global handler.
+- Auth uses HttpOnly `jf_session`, mirrored `jf_csrf`/`X-CSRF-Token`, hashed opaque tokens, Argon2 passwords, and `Origin` checks on state changes. Role and agency authorization is resolved server-side; do not trust submitted role/agency IDs.
+- Tests use `fastapi.testclient.TestClient` against the configured database and a migration up/down test. Verified commands: `uv run pytest -q` (18 passed) and `uv run ruff check .` (clean). Run `uv run alembic upgrade head` before starting the API on a fresh database.
