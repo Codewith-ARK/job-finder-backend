@@ -1,0 +1,53 @@
+# Backend agent rules
+
+Applies to this repository. Read workspace `../AGENTS.md`, this file, `CONTEXT.md`, `README.md`, `docs/ARCHITECTURE.md`, and the assigned task in `docs/PLAN.md`. Architecture v0.2 is approved. **Current priority is mock frontend workflows; do not start backend features merely because their documentation exists.**
+
+## Scope
+
+1. Complete only the assigned task or explicitly assigned task sequence. Name intended files first. Necessary controller/service/model/schema changes for one feature are allowed; unrelated refactors are excluded.
+2. Preserve the working scaffold, Python tooling, lockfile, versions, and user changes. Do not re-scaffold, upgrade as cleanup, or alter the sibling frontend unless the task includes it.
+3. Use FastAPI, Pydantic, SQLAlchemy, PostgreSQL, and Alembic. Install missing pieces only for a task that requires them. No repository layer, nested feature modules, generic CRUD base classes, or extra infrastructure without a scoped requirement.
+4. Write efficient, DRY, modular, readable, functional code. Extract meaningful repetition without generic CRUD base classes.
+5. Existing authorization covers the assigned work. Resolve material changes to product behavior, API contracts, dependencies, or architecture before expanding scope; do not ask again for an already approved task.
+
+## Boundaries
+
+| Location | Owns |
+| --- | --- |
+| `controllers/` | HTTP routing, validated inputs, authenticated context, service calls, response/status mapping. No SQL. |
+| `services/` | Ordinary functions for business rules, record/agency permissions, queries, transactions. |
+| `models/` | SQLAlchemy tables, relationships, constraints. |
+| `schemas/` | Separate input/output contracts and allowed fields. |
+| `main.py` | Application setup and router registration. |
+| `config.py`, `database.py`, `security.py` | Settings, database connections/sessions, security helpers/dependencies. Auth dependencies delegate lookups to services. |
+
+- Name by scope and singular concern: `jobs_controller.py`, `jobs_service.py`, `jobs_model.py`, `jobs_schema.py`. Python packages include `__init__.py`. Add files only when used.
+- Services query models directly. Services never import controllers; models and schemas never import services/controllers. Keep service dependencies acyclic.
+- Use request-scoped database sessions. The outer service operation owns commit/rollback; helpers must not commit partial workflows. Follow the existing sync/async database style consistently.
+- Schema changes require reviewed Alembic migrations. Do not rewrite applied migrations, reset populated databases, or use runtime table creation instead of migrations.
+
+## Security
+
+- Resolve identity and verified agency membership server-side. Every private query/write must enforce applicable role and record ownership, including supplied relationship IDs. Never trust a submitted role or agency ID as authorization.
+- Keep one user identity system with agency memberships. Role capabilities and onboarding transitions must be explicit in the assigned feature contract; unknown permissions deny access.
+- Use explicit response schemas and allowlisted input fields. Never serialize password hashes, session credentials, provider tokens, or internal secrets. Keep SQL parameterized and sensitive values out of logs.
+- Cookie sessions require backend validation, expiry/logout invalidation, suitable cookie flags, and a documented CSRF defense for state changes, including login/logout. Route guards and cookie presence are insufficient.
+- Private documents remain outside public/static directories. Authorize downloads when that feature is implemented.
+
+## Completion
+
+Run configured checks and focused service/API tests. Changes to auth, permissions, or queries must test unauthenticated access, wrong role/record, and cross-agency denial. Exercise migrations against a disposable test database. Do not claim unrun checks passed.
+
+Handoff: task ID; changed files; checks/results; migrations or contract changes; remaining blocker. Update the task status only when its acceptance criteria pass.
+
+## UI-to-API handoff
+
+Reviewed workflows and contracts guide implementation; mock role behavior is not authorization policy. Implement and verify real authentication first, then feature APIs. Coordinate removal of frontend runtime mocks only after the corresponding integration passes. Protect dependent record IDs during mixed mock/API development. Update CONTEXT with real endpoints and verified status.
+
+## Observed conventions — agent maintained
+
+- `pyproject.toml` requires Python `>=3.14`; `.python-version` contains `3.14`; `uv.lock` is present; uv `0.12.9` and Python `3.14.5` are installed, with a local `.venv` present.
+- The current application is a minimal FastAPI scaffold: root `main.py` exposes `app = FastAPI()` and only `GET /` returning `{"Hello": "World"}`. `src/app/__init__.py` only exposes the sample `app` console function.
+- The only declared runtime dependency is `fastapi[standard]`; the project script `app` runs `app:main` and prints the sample greeting. No SQLAlchemy, PostgreSQL, Alembic, controller/service/model/schema, or test implementation is present.
+- No `compose.yaml`/`docker-compose.yml`, `.env.example`, database configuration, migration directory, lint configuration, or test configuration is present. Docker is not installed on the current PATH.
+- Verified non-destructive commands are `uv run app`, `uv run fastapi dev main.py`, and an in-process FastAPI `TestClient` health check. The FastAPI CLI needs `PYTHONUTF8=1` in this PowerShell console to avoid a help-output encoding error. Pytest is not installed.
