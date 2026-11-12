@@ -12,6 +12,7 @@ WorkType = Literal["Remote", "Hybrid", "On-site"]
 
 class JobOut(ApiModel):
     id: str
+    agency_name: str
     title: str
     company: str
     location: str
@@ -26,6 +27,9 @@ class JobOut(ApiModel):
 class ApplicationOut(ApiModel):
     id: str
     job_id: str
+    job_title: str
+    company: str
+    agency_name: str
     candidate_id: str
     candidate_name: str
     status: str

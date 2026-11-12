@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session as DbSession
 from ..config import get_settings
 from ..database import get_db
 from ..schemas.candidates_schema import (
+    AcademicStepInput,
     CandidateWorkspaceOut,
-    PreferencesPatch,
-    ProfilePatch,
+    PersonalStepInput,
+    ProfessionalStepInput,
 )
 from ..security import current_candidate, require_candidate
 from ..services import candidates_service
@@ -25,22 +26,31 @@ def read_workspace(
     return candidates_service.workspace(db, context.user)
 
 
-@router.patch("/me/profile", response_model=CandidateWorkspaceOut)
-def update_profile(
-    payload: ProfilePatch,
+@router.put("/me/onboarding/personal", response_model=CandidateWorkspaceOut)
+def save_personal(
+    payload: PersonalStepInput,
     context=Depends(require_candidate),
     db: DbSession = Depends(get_db),
 ) -> CandidateWorkspaceOut:
-    return candidates_service.update_profile(db, context.user, payload)
+    return candidates_service.save_personal(db, context.user, payload)
 
 
-@router.patch("/me/preferences", response_model=CandidateWorkspaceOut)
-def update_preferences(
-    payload: PreferencesPatch,
+@router.put("/me/onboarding/professional", response_model=CandidateWorkspaceOut)
+def save_professional(
+    payload: ProfessionalStepInput,
     context=Depends(require_candidate),
     db: DbSession = Depends(get_db),
 ) -> CandidateWorkspaceOut:
-    return candidates_service.update_preferences(db, context.user, payload)
+    return candidates_service.save_professional(db, context.user, payload)
+
+
+@router.put("/me/onboarding/academic", response_model=CandidateWorkspaceOut)
+def save_academic(
+    payload: AcademicStepInput,
+    context=Depends(require_candidate),
+    db: DbSession = Depends(get_db),
+) -> CandidateWorkspaceOut:
+    return candidates_service.save_academic(db, context.user, payload)
 
 
 @router.post("/me/onboarding/{step_id}/complete", response_model=CandidateWorkspaceOut)

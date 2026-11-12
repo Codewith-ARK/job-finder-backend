@@ -1,19 +1,22 @@
-import hashlib
-import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 
-from pwdlib import PasswordHash
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
-from ..models import Agency, AuthSession, CandidateProfile, Membership, OnboardingStep, User
+from ..models import (
+    Agency,
+    AuthSession,
+    CandidateAssignment,
+    Membership,
+    User,
+)
 from ..models.common import utcnow
 from ..schemas.auth_schema import AgencyOut, DemoPersonaOut, SessionOut, SessionUserOut
+from . import candidates_service, referrals_service
+from .credentials import hash_password, hash_secret, new_secret, verify_password
 from .errors import Conflict, Forbidden, NotFound, Unauthorized
-
-password_hash = PasswordHash.recommended()
 
 ROLE_LABELS = {
     "candidate": "Candidate",
@@ -34,24 +37,6 @@ ROLE_DESCRIPTIONS = {
     "platform_admin": "A foundation for the future platform administration experience.",
 }
 
-ONBOARDING = (
-    (
-        "profile",
-        "Complete your profile",
-        "Help your team understand where you want to go next.",
-    ),
-    (
-        "preferences",
-        "Set your preferences",
-        "Tell us what kind of opportunity feels right.",
-    ),
-    (
-        "documents",
-        "Add your documents",
-        "Keep your CV and supporting documents in one place.",
-    ),
-)
-
 
 @dataclass
 class AuthContext:
@@ -60,27 +45,8 @@ class AuthContext:
     agency: Agency | None
 
 
-def hash_secret(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def hash_password(value: str) -> str:
-    return password_hash.hash(value)
-
-
-def verify_password(value: str, stored: str) -> bool:
-    return password_hash.verify(value, stored)
-
-
 def normalize_email(email: str) -> str:
     return email.strip().lower()
-
-
-def default_agency(db: DbSession) -> Agency:
-    agency = db.scalar(select(Agency).where(Agency.slug == get_settings().default_agency_slug))
-    if not agency:
-        raise NotFound("The default agency is not configured.")
-    return agency
 
 
 def active_memberships(db: DbSession, user_id: str) -> list[Membership]:
@@ -93,33 +59,12 @@ def active_memberships(db: DbSession, user_id: str) -> list[Membership]:
     )
 
 
-def bootstrap_candidate(db: DbSession, user: User, agency: Agency) -> CandidateProfile:
-    profile = CandidateProfile(
-        user_id=user.id,
-        agency_id=agency.id,
-        headline="",
-        location="",
-        skills=[],
-    )
-    db.add(profile)
-    for position, (key, _title, _description) in enumerate(ONBOARDING):
-        db.add(
-            OnboardingStep(
-                candidate_id=user.id,
-                key=key,
-                position=position,
-                status="next" if position == 0 else "upcoming",
-            )
-        )
-    return profile
-
-
 def create_session(
     db: DbSession, user: User, active_agency_id: str | None
 ) -> tuple[AuthSession, str, str]:
     settings = get_settings()
-    token = secrets.token_urlsafe(32)
-    csrf = secrets.token_urlsafe(32)
+    token = new_secret()
+    csrf = new_secret()
     record = AuthSession(
         user_id=user.id,
         token_hash=hash_secret(token),
@@ -132,6 +77,16 @@ def create_session(
     return record, token, csrf
 
 
+def _membership_for_agency(db: DbSession, user_id: str, agency_id: str) -> Membership | None:
+    return db.scalar(
+        select(Membership).where(
+            Membership.user_id == user_id,
+            Membership.agency_id == agency_id,
+            Membership.active.is_(True),
+        )
+    )
+
+
 def resolve_session(db: DbSession, token: str | None) -> AuthContext | None:
     if not token:
         return None
@@ -142,22 +97,29 @@ def resolve_session(db: DbSession, token: str | None) -> AuthContext | None:
     if not user or not user.is_active:
         return None
     agency = db.get(Agency, record.active_agency_id) if record.active_agency_id else None
-    if user.role != "platform_admin":
-        if not agency or agency.status != "active":
+
+    if user.role == "platform_admin":
+        return AuthContext(user=user, session=record, agency=None)
+
+    if user.role == "candidate":
+        # Independent candidates have no agency. Referred candidates carry an agency
+        # context and must still hold an active membership in it.
+        if agency is None:
+            return AuthContext(user=user, session=record, agency=None)
+        if agency.status != "active" or not _membership_for_agency(db, user.id, agency.id):
             return None
-        membership = db.scalar(
-            select(Membership).where(
-                Membership.user_id == user.id,
-                Membership.agency_id == agency.id,
-                Membership.active.is_(True),
-            )
-        )
-        if not membership:
-            return None
+        return AuthContext(user=user, session=record, agency=agency)
+
+    if not agency or agency.status != "active":
+        return None
+    if not _membership_for_agency(db, user.id, agency.id):
+        return None
     return AuthContext(user=user, session=record, agency=agency)
 
 
 def verify_csrf(record: AuthSession, token: str) -> bool:
+    import secrets
+
     return secrets.compare_digest(record.csrf_hash, hash_secret(token))
 
 
@@ -186,6 +148,8 @@ def _resolve_login_agency(
     if user.role == "platform_admin":
         return None
     memberships = active_memberships(db, user.id)
+    if user.role == "candidate" and not memberships and not requested_agency_id:
+        return None
     if not memberships:
         raise Forbidden("This account has no active agency membership.")
     if requested_agency_id:
@@ -213,11 +177,21 @@ def login(
     return AuthContext(user=user, session=record, agency=agency), token, csrf
 
 
-def register(db: DbSession, name: str, email: str, password: str) -> tuple[AuthContext, str, str]:
+def register(
+    db: DbSession,
+    name: str,
+    email: str,
+    password: str,
+    referral_token: str | None = None,
+) -> tuple[AuthContext, str, str]:
     normalized = normalize_email(email)
     if db.scalar(select(User).where(User.email == normalized)):
         raise Conflict("An account with that email already exists.")
-    agency = default_agency(db)
+
+    resolved = referrals_service.resolve(db, referral_token) if referral_token else None
+    if resolved is not None and not resolved.valid:
+        raise Conflict(resolved.reason or "This referral link is not valid.")
+
     user = User(
         email=normalized,
         name=name.strip(),
@@ -226,9 +200,26 @@ def register(db: DbSession, name: str, email: str, password: str) -> tuple[AuthC
     )
     db.add(user)
     db.flush()
-    db.add(Membership(user_id=user.id, agency_id=agency.id, title="Candidate"))
-    bootstrap_candidate(db, user, agency)
-    record, token, csrf = create_session(db, user, agency.id)
+
+    agency: Agency | None = None
+    if referral_token:
+        link = referrals_service.consume(db, referral_token, user.id)
+        agency = link.agency
+        if not agency or agency.status != "active":
+            raise Conflict("That agency is not currently accepting referrals.")
+        db.add(Membership(user_id=user.id, agency_id=agency.id, title="Candidate"))
+        candidates_service.bootstrap_candidate(db, user, agency.id)
+        db.add(
+            CandidateAssignment(
+                agency_id=agency.id,
+                candidate_id=user.id,
+                member_id=link.created_by,
+            )
+        )
+    else:
+        candidates_service.bootstrap_candidate(db, user, None)
+
+    record, token, csrf = create_session(db, user, agency.id if agency else None)
     db.commit()
     return AuthContext(user=user, session=record, agency=agency), token, csrf
 

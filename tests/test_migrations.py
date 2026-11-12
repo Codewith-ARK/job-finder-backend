@@ -21,9 +21,14 @@ def test_migrations_create_and_drop_schema():
         "agencies",
         "applications",
         "auth_sessions",
+        "candidate_education",
+        "candidate_experiences",
+        "candidate_preferences",
         "candidate_profiles",
+        "candidate_skills",
         "jobs",
         "memberships",
+        "referral_links",
         "users",
     } <= tables
 

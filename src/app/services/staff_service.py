@@ -27,10 +27,11 @@ from ..schemas.staff_schema import (
     StaffWorkspaceOut,
     TeamMemberOut,
 )
-from .auth_service import hash_password
+from . import candidates_service
+from .credentials import hash_password
 from .errors import Conflict, Forbidden, NotFound
 
-STEP_WEIGHTS = {"profile": 40, "preferences": 30, "documents": 30}
+STEP_WEIGHTS = candidates_service.STEP_WEIGHTS
 
 
 def _agency(db: DbSession, agency_id: str) -> Agency:
@@ -45,13 +46,17 @@ def _candidate_profiles(db: DbSession, agency_id: str) -> list[CandidateProfile]
         db.scalars(
             select(CandidateProfile)
             .join(User, User.id == CandidateProfile.user_id)
+            .join(Membership, Membership.user_id == CandidateProfile.user_id)
             .options(
                 selectinload(CandidateProfile.steps),
                 selectinload(CandidateProfile.user),
+                selectinload(CandidateProfile.skills),
             )
             .where(
-                CandidateProfile.agency_id == agency_id,
+                Membership.agency_id == agency_id,
+                Membership.active.is_(True),
                 User.is_active.is_(True),
+                User.role == "candidate",
             )
             .order_by(CandidateProfile.updated_at.desc())
         )
@@ -128,7 +133,7 @@ def workspace(db: DbSession, agency_id: str) -> StaffWorkspaceOut:
             assigned_to=assignments[profile.user_id].member_id
             if profile.user_id in assignments
             else None,
-            skills=profile.skills or [],
+            skills=[skill.name for skill in profile.skills],
             updated_at=profile.updated_at,
         )
         for profile in profiles
@@ -210,7 +215,14 @@ def assign_candidate(
     member_id: str | None,
 ) -> StaffWorkspaceOut:
     profile = db.get(CandidateProfile, candidate_id)
-    if not profile or profile.agency_id != agency_id:
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == candidate_id,
+            Membership.agency_id == agency_id,
+            Membership.active.is_(True),
+        )
+    )
+    if not profile or not membership:
         raise NotFound("That candidate is not available in this agency.")
     assignment = db.scalar(
         select(CandidateAssignment).where(
@@ -261,7 +273,14 @@ def update_stage(
     db: DbSession, agency_id: str, actor: User, candidate_id: str, stage: str
 ) -> StaffWorkspaceOut:
     profile = db.get(CandidateProfile, candidate_id)
-    if not profile or profile.agency_id != agency_id:
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == candidate_id,
+            Membership.agency_id == agency_id,
+            Membership.active.is_(True),
+        )
+    )
+    if not profile or not membership:
         raise NotFound("That candidate is not available in this agency.")
     profile.stage = stage
     profile.updated_at = utcnow()

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 
 
@@ -7,7 +8,9 @@ def test_demo_session_lifecycle(sign_in):
     client, csrf, session = sign_in("Aya Khan")
     assert session["user"]["role"] == "candidate"
     assert session["user"]["workspace"] == "candidate"
-    assert session["agency"]["name"] == "Northstar Careers"
+    # Independent candidates are not attached to an agency.
+    assert session["agency"] is None
+    assert session["user"]["agencies"] == []
     current = client.get("/api/auth/session")
     assert current.status_code == 200
     assert current.json()["user"]["name"] == "Aya Khan"
@@ -85,7 +88,7 @@ def test_new_candidate_must_complete_profile_fields_first(client):
     )
     csrf = client.cookies.get("jf_csrf")
     response = client.post(
-        "/api/candidates/me/onboarding/profile/complete",
+        "/api/candidates/me/onboarding/personal/complete",
         headers={"X-CSRF-Token": csrf},
     )
     assert response.status_code == 409
@@ -100,67 +103,150 @@ def test_disallowed_origin_is_rejected(client):
     assert response.status_code == 403
 
 
+def test_docs_testing_origin_and_csrf_interceptor(client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "docs_testing_enabled", True)
+    allowed = client.post(
+        "/api/auth/login",
+        json={"email": "aya@demo.example.com", "password": "Demo1234!"},
+        headers={"Origin": "http://testserver"},
+    )
+    assert allowed.status_code == 200
+
+    docs = client.get("/docs")
+    assert docs.status_code == 200
+    assert "X-CSRF-Token" in docs.text
+
+    monkeypatch.setattr(settings, "docs_testing_enabled", False)
+    denied = client.post(
+        "/api/auth/login",
+        json={"email": "aya@demo.example.com", "password": "Demo1234!"},
+        headers={"Origin": "http://testserver"},
+    )
+    assert denied.status_code == 403
+
+
 def test_candidate_onboarding_order_and_documents(sign_in):
     client, csrf, _ = sign_in("Aya Khan")
-    early = client.post(
-        "/api/candidates/me/onboarding/documents/complete",
-        headers={"X-CSRF-Token": csrf},
-    )
+    headers = {"X-CSRF-Token": csrf}
+    early = client.post("/api/candidates/me/onboarding/documents/complete", headers=headers)
     assert early.status_code == 409
 
-    updated = client.patch(
-        "/api/candidates/me/profile",
+    # The order is enforced while saving, not only while completing.
+    out_of_order = client.put(
+        "/api/candidates/me/onboarding/professional",
         json={
-            "headline": "Product designer",
-            "location": "Lahore, Pakistan",
-            "skills": ["Figma", "Research"],
+            "currentTitle": "Product designer",
+            "experienceLevel": "Junior",
+            "skills": ["Figma"],
+            "experiences": [],
+            "preferences": {"workType": "Remote"},
         },
-        headers={"X-CSRF-Token": csrf},
+        headers=headers,
     )
-    assert updated.status_code == 200
-    completed = client.post(
-        "/api/candidates/me/onboarding/profile/complete",
-        headers={"X-CSRF-Token": csrf},
-    )
-    assert completed.status_code == 200
-    assert completed.json()["profile"]["completion"] == 40
+    assert out_of_order.status_code == 409
 
-    prefs = client.patch(
-        "/api/candidates/me/preferences",
+    personal = client.put(
+        "/api/candidates/me/onboarding/personal",
         json={
-            "preferredWorkType": "Remote",
-            "preferredLocation": "Remote",
-            "salaryExpectation": "$90k",
+            "phone": "+92 300 1234567",
+            "location": "Lahore, Pakistan",
+            "headline": "Product designer",
+            "summary": "Designer moving into product.",
         },
-        headers={"X-CSRF-Token": csrf},
+        headers=headers,
     )
-    assert prefs.status_code == 200
+    assert personal.status_code == 200, personal.text
+    completed = client.post("/api/candidates/me/onboarding/personal/complete", headers=headers)
+    assert completed.status_code == 200
+    assert completed.json()["profile"]["completion"] == 20
+
+    professional = client.put(
+        "/api/candidates/me/onboarding/professional",
+        json={
+            "currentTitle": "Product designer",
+            "experienceLevel": "Junior",
+            "skills": ["Figma", "Research", "figma"],
+            "experiences": [
+                {
+                    "company": "Studio One",
+                    "title": "Designer",
+                    "location": "Lahore",
+                    "startDate": "2022-01",
+                    "current": True,
+                    "description": "Worked on discovery.",
+                }
+            ],
+            "preferences": {
+                "workType": "Remote",
+                "preferredLocation": "Remote",
+                "salaryExpectation": "$40k",
+                "availability": "1 month",
+                "willingToRelocate": False,
+            },
+        },
+        headers=headers,
+    )
+    assert professional.status_code == 200, professional.text
+    assert professional.json()["skills"] == ["Figma", "Research"]
+    advanced = client.post("/api/candidates/me/onboarding/professional/complete", headers=headers)
+    assert advanced.json()["profile"]["completion"] == 50
+
+    academic = client.put(
+        "/api/candidates/me/onboarding/academic",
+        json={
+            "education": [
+                {
+                    "institution": "Punjab University",
+                    "degree": "BSc",
+                    "fieldOfStudy": "Computer Science",
+                    "startYear": 2018,
+                    "endYear": 2022,
+                    "grade": "3.6 GPA",
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert academic.status_code == 200, academic.text
     assert (
-        client.post(
-            "/api/candidates/me/onboarding/preferences/complete",
-            headers={"X-CSRF-Token": csrf},
-        ).json()["profile"]["completion"]
-        == 70
+        client.post("/api/candidates/me/onboarding/academic/complete", headers=headers).json()[
+            "profile"
+        ]["completion"]
+        == 75
     )
 
     upload = client.post(
         "/api/candidates/me/documents",
         files={"file": ("cv.pdf", b"%PDF-1.4 test", "application/pdf")},
-        headers={"X-CSRF-Token": csrf},
+        headers=headers,
     )
     assert upload.status_code == 200, upload.text
     document = upload.json()["documents"][0]
     download = client.get(f"/api/candidates/me/documents/{document['id']}")
     assert download.status_code == 200
     assert download.content == b"%PDF-1.4 test"
-    done = client.post(
-        "/api/candidates/me/onboarding/documents/complete",
-        headers={"X-CSRF-Token": csrf},
-    )
+    done = client.post("/api/candidates/me/onboarding/documents/complete", headers=headers)
     assert done.json()["profile"]["completion"] == 100
+    assert done.json()["onboardingComplete"] is True
+
+    # Saved progress survives a logout/login cycle, including normalized data.
+    assert client.post("/api/auth/logout", headers=headers).status_code == 204
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "aya@demo.example.com", "password": "Demo1234!"},
+        headers={"Origin": "http://localhost:3000"},
+    )
+    assert login.status_code == 200
+    resumed = client.get("/api/candidates/me").json()
+    assert resumed["profile"]["completion"] == 100
+    assert resumed["experiences"][0]["company"] == "Studio One"
+    assert resumed["education"][0]["institution"] == "Punjab University"
+    assert resumed["preferences"]["preferredLocation"] == "Remote"
+
     removed = client.delete(
         f"/api/candidates/me/documents/{document['id']}",
-        headers={"X-CSRF-Token": csrf},
+        headers={"X-CSRF-Token": client.cookies.get("jf_csrf")},
     )
     assert removed.status_code == 200
     assert removed.json()["documents"] == []
@@ -176,14 +262,15 @@ def test_candidate_cannot_read_another_agency(sign_in):
     assert login.status_code == 200
     workspace = client.get("/api/candidates/me").json()
     assert workspace["profile"]["name"] == "Mia Chen"
+    assert workspace["referral"]["agencyName"] == "Harbor Talent"
     jobs = client.get("/api/jobs/workspace").json()
-    assert all(job["title"] == "Content Designer" for job in jobs["jobs"])
+    assert {job["title"] for job in jobs["jobs"]} == {"Content Designer"}
 
-    northstar, _csrf, _ = sign_in("Aya Khan")
-    assert all(
-        job["title"] != "Content Designer"
-        for job in northstar.get("/api/jobs/workspace").json()["jobs"]
-    )
+    # Independent candidates see every open role across active agencies.
+    independent, _csrf, _ = sign_in("Aya Khan")
+    independent_jobs = independent.get("/api/jobs/workspace").json()["jobs"]
+    assert "Content Designer" in {job["title"] for job in independent_jobs}
+    assert len(independent_jobs) == 5
 
 
 def test_employee_read_only_and_supervisor_management(sign_in):

@@ -3,28 +3,60 @@ from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import selectinload
 
 from ..config import get_settings
 from ..models import (
     Activity,
+    CandidateEducation,
+    CandidateExperience,
+    CandidatePreference,
     CandidateProfile,
+    CandidateSkill,
     Document,
     Membership,
+    OnboardingStep,
     User,
 )
 from ..models.common import utcnow
 from ..schemas.candidates_schema import (
+    AcademicStepInput,
     CandidateWorkspaceOut,
     DocumentOut,
+    EducationOut,
+    ExperienceOut,
     OnboardingStepOut,
-    PreferencesPatch,
+    PersonalStepInput,
+    PreferenceOut,
+    ProfessionalStepInput,
     ProfileOut,
-    ProfilePatch,
+    ReferralContextOut,
 )
-from .auth_service import ONBOARDING
 from .errors import Conflict, Forbidden, NotFound
 
-STEP_WEIGHTS = {"profile": 40, "preferences": 30, "documents": 30}
+ONBOARDING = (
+    (
+        "personal",
+        "Personal details",
+        "Tell us who you are and how your team can reach you.",
+    ),
+    (
+        "professional",
+        "Professional details",
+        "Add your role, experience, skills, and what you are looking for.",
+    ),
+    (
+        "academic",
+        "Academic details",
+        "Add your education so your profile is complete.",
+    ),
+    (
+        "documents",
+        "Documents",
+        "Upload your CV and any supporting documents.",
+    ),
+)
+STEP_WEIGHTS = {"personal": 20, "professional": 30, "academic": 25, "documents": 25}
 ALLOWED_DOCUMENT_TYPES = {
     "application/pdf",
     "application/msword",
@@ -33,10 +65,48 @@ ALLOWED_DOCUMENT_TYPES = {
 MAX_SKILLS = 30
 
 
+def _profile_query(user_id: str):
+    return (
+        select(CandidateProfile)
+        .options(
+            selectinload(CandidateProfile.steps),
+            selectinload(CandidateProfile.documents),
+            selectinload(CandidateProfile.preferences),
+            selectinload(CandidateProfile.experiences),
+            selectinload(CandidateProfile.education),
+            selectinload(CandidateProfile.skills),
+        )
+        .where(CandidateProfile.user_id == user_id)
+    )
+
+
 def _profile(db: DbSession, user_id: str) -> CandidateProfile:
-    profile = db.get(CandidateProfile, user_id)
+    profile = db.scalar(_profile_query(user_id))
     if not profile:
         raise NotFound("A candidate profile has not been created for this account.")
+    return profile
+
+
+def bootstrap_candidate(
+    db: DbSession, user: User, agency_id: str | None = None
+) -> CandidateProfile:
+    profile = CandidateProfile(
+        user_id=user.id,
+        agency_id=agency_id,
+        headline="",
+        location="",
+    )
+    db.add(profile)
+    db.add(CandidatePreference(user_id=user.id, work_type="", preferred_location=""))
+    for position, (key, _title, _description) in enumerate(ONBOARDING):
+        db.add(
+            OnboardingStep(
+                candidate_id=user.id,
+                key=key,
+                position=position,
+                status="next" if position == 0 else "upcoming",
+            )
+        )
     return profile
 
 
@@ -70,15 +140,20 @@ def _next_steps(profile: CandidateProfile) -> list[str]:
             "Track every update from your team here.",
         ]
     return {
-        "profile": [
-            "Finish the profile details your team can review.",
-            "Share the kind of roles and work environment you prefer.",
+        "personal": [
+            "Add your contact details and a short headline.",
+            "Add your professional experience and skills.",
             "Upload your CV so your team can prepare.",
         ],
-        "preferences": [
-            "Tell your team what kind of work feels right.",
-            "Add your CV and supporting documents.",
-            "Browse roles matched to your preferences.",
+        "professional": [
+            "Tell us what kind of work feels right.",
+            "Add your academic background.",
+            "Upload your CV and supporting documents.",
+        ],
+        "academic": [
+            "Add your highest qualification and institution.",
+            "Upload your CV and supporting documents.",
+            "Browse roles matched to your profile.",
         ],
         "documents": [
             "Upload your CV and any supporting files.",
@@ -88,21 +163,67 @@ def _next_steps(profile: CandidateProfile) -> list[str]:
     }[next_step.key]
 
 
+def _preference_out(profile: CandidateProfile) -> PreferenceOut | None:
+    preference = profile.preferences
+    if not preference:
+        return None
+    return PreferenceOut(
+        work_type=preference.work_type,
+        preferred_location=preference.preferred_location,
+        salary_expectation=preference.salary_expectation,
+        availability=preference.availability,
+        willing_to_relocate=preference.willing_to_relocate,
+    )
+
+
 def workspace(db: DbSession, user: User) -> CandidateWorkspaceOut:
+    from . import referrals_service
+
     profile = _profile(db, user.id)
     documents = sorted(profile.documents, key=lambda item: item.created_at, reverse=True)
+    referral = referrals_service.context_for_candidate(db, user.id)
     return CandidateWorkspaceOut(
         profile=ProfileOut(
             name=user.name,
             email=user.email,
             headline=profile.headline,
+            summary=profile.summary,
+            phone=profile.phone,
             location=profile.location,
-            skills=profile.skills or [],
+            linkedin_url=profile.linkedin_url,
+            portfolio_url=profile.portfolio_url,
+            current_title=profile.current_title,
+            experience_level=profile.experience_level,
             completion=_completion(profile),
-            preferred_work_type=profile.preferred_work_type,
-            preferred_location=profile.preferred_location,
-            salary_expectation=profile.salary_expectation,
+            stage=profile.stage,
         ),
+        preferences=_preference_out(profile),
+        experiences=[
+            ExperienceOut(
+                id=item.id,
+                company=item.company,
+                title=item.title,
+                location=item.location,
+                start_date=item.start_date,
+                end_date=item.end_date,
+                current=item.current,
+                description=item.description,
+            )
+            for item in profile.experiences
+        ],
+        education=[
+            EducationOut(
+                id=item.id,
+                institution=item.institution,
+                degree=item.degree,
+                field_of_study=item.field_of_study,
+                start_year=item.start_year,
+                end_year=item.end_year,
+                grade=item.grade,
+            )
+            for item in profile.education
+        ],
+        skills=[item.name for item in profile.skills],
         onboarding=_step_statuses(profile),
         next_steps=_next_steps(profile),
         documents=[
@@ -114,7 +235,103 @@ def workspace(db: DbSession, user: User) -> CandidateWorkspaceOut:
             )
             for document in documents
         ],
+        onboarding_complete=all(step.status == "complete" for step in profile.steps),
+        referral=ReferralContextOut(**referral) if referral else None,
     )
+
+
+def _step(profile: CandidateProfile, step_key: str):
+    step = next((item for item in profile.steps if item.key == step_key), None)
+    if not step:
+        raise NotFound("That onboarding step is not available.")
+    if step.status == "upcoming":
+        raise Conflict("Complete the current onboarding step first.")
+    return step
+
+
+def save_personal(db: DbSession, user: User, payload: PersonalStepInput) -> CandidateWorkspaceOut:
+    profile = _profile(db, user.id)
+    _step(profile, "personal")
+    profile.phone = payload.phone.strip()
+    profile.location = payload.location.strip()
+    profile.headline = payload.headline.strip()
+    profile.summary = payload.summary.strip()
+    profile.linkedin_url = payload.linkedin_url.strip()
+    profile.portfolio_url = payload.portfolio_url.strip()
+    profile.updated_at = utcnow()
+    db.commit()
+    return workspace(db, user)
+
+
+def _replace_experiences(profile: CandidateProfile, payload: ProfessionalStepInput) -> None:
+    profile.experiences.clear()
+    for item in payload.experiences:
+        profile.experiences.append(
+            CandidateExperience(
+                candidate_id=profile.user_id,
+                company=item.company.strip(),
+                title=item.title.strip(),
+                location=item.location.strip(),
+                start_date=item.start_date,
+                end_date=None if item.current else item.end_date,
+                current=item.current,
+                description=item.description.strip(),
+            )
+        )
+
+
+def _replace_skills(db: DbSession, profile: CandidateProfile, skills: list[str]) -> None:
+    # Flush the removals first: the unique (candidate_id, name) constraint would
+    # otherwise reject a replacement that reuses an existing skill name.
+    profile.skills.clear()
+    db.flush()
+    for name in skills[:MAX_SKILLS]:
+        profile.skills.append(CandidateSkill(candidate_id=profile.user_id, name=name))
+
+
+def save_professional(
+    db: DbSession, user: User, payload: ProfessionalStepInput
+) -> CandidateWorkspaceOut:
+    profile = _profile(db, user.id)
+    _step(profile, "professional")
+    profile.current_title = payload.current_title.strip()
+    profile.experience_level = payload.experience_level
+    _replace_skills(db, profile, payload.skills)
+    _replace_experiences(profile, payload)
+    preference = profile.preferences
+    if not preference:
+        preference = CandidatePreference(user_id=profile.user_id)
+        profile.preferences = preference
+    preference.work_type = payload.preferences.work_type
+    preference.preferred_location = payload.preferences.preferred_location.strip()
+    preference.salary_expectation = payload.preferences.salary_expectation.strip()
+    preference.availability = payload.preferences.availability.strip()
+    preference.willing_to_relocate = payload.preferences.willing_to_relocate
+    preference.updated_at = utcnow()
+    profile.updated_at = utcnow()
+    db.commit()
+    return workspace(db, user)
+
+
+def save_academic(db: DbSession, user: User, payload: AcademicStepInput) -> CandidateWorkspaceOut:
+    profile = _profile(db, user.id)
+    _step(profile, "academic")
+    profile.education.clear()
+    for item in payload.education:
+        profile.education.append(
+            CandidateEducation(
+                candidate_id=profile.user_id,
+                institution=item.institution.strip(),
+                degree=item.degree.strip(),
+                field_of_study=item.field_of_study.strip(),
+                start_year=item.start_year,
+                end_year=item.end_year,
+                grade=item.grade.strip(),
+            )
+        )
+    profile.updated_at = utcnow()
+    db.commit()
+    return workspace(db, user)
 
 
 def _advance_steps(profile: CandidateProfile) -> None:
@@ -126,7 +343,9 @@ def _advance_steps(profile: CandidateProfile) -> None:
         next_assigned = True
 
 
-def _log(db: DbSession, agency_id: str, user_id: str, title: str, detail: str) -> None:
+def _log(db: DbSession, agency_id: str | None, user_id: str, title: str, detail: str) -> None:
+    if agency_id is None:
+        return
     db.add(
         Activity(
             agency_id=agency_id,
@@ -138,24 +357,28 @@ def _log(db: DbSession, agency_id: str, user_id: str, title: str, detail: str) -
     )
 
 
-def update_profile(db: DbSession, user: User, patch: ProfilePatch) -> CandidateWorkspaceOut:
-    profile = _profile(db, user.id)
-    profile.headline = patch.headline.strip()
-    profile.location = patch.location.strip()
-    profile.skills = [skill.strip() for skill in patch.skills if skill.strip()][:MAX_SKILLS]
-    profile.updated_at = utcnow()
-    db.commit()
-    return workspace(db, user)
-
-
-def update_preferences(db: DbSession, user: User, patch: PreferencesPatch) -> CandidateWorkspaceOut:
-    profile = _profile(db, user.id)
-    profile.preferred_work_type = patch.preferred_work_type.strip()
-    profile.preferred_location = patch.preferred_location.strip()
-    profile.salary_expectation = patch.salary_expectation.strip()
-    profile.updated_at = utcnow()
-    db.commit()
-    return workspace(db, user)
+def _validate_step(profile: CandidateProfile, step_key: str) -> None:
+    if step_key == "personal" and not (
+        profile.phone.strip() and profile.location.strip() and profile.headline.strip()
+    ):
+        raise Conflict("Add your phone, location, and headline first.")
+    if step_key == "professional":
+        preference = profile.preferences
+        if not (
+            profile.current_title.strip()
+            and profile.experience_level.strip()
+            and profile.skills
+            and preference
+            and preference.work_type.strip()
+            and preference.preferred_location.strip()
+        ):
+            raise Conflict(
+                "Add your current title, experience level, skills, and work preference first."
+            )
+    if step_key == "academic" and not profile.education:
+        raise Conflict("Add at least one education entry first.")
+    if step_key == "documents" and not profile.documents:
+        raise Conflict("Upload at least one document first.")
 
 
 def complete_step(db: DbSession, user: User, step_id: str) -> CandidateWorkspaceOut:
@@ -167,16 +390,7 @@ def complete_step(db: DbSession, user: User, step_id: str) -> CandidateWorkspace
         return workspace(db, user)
     if step.status == "upcoming":
         raise Conflict("Complete the current onboarding step first.")
-    if step_id == "profile" and not (
-        profile.headline.strip() and profile.location.strip() and profile.skills
-    ):
-        raise Conflict("Add a headline, location, and at least one skill first.")
-    if step_id == "preferences" and not (
-        profile.preferred_work_type.strip() and profile.preferred_location.strip()
-    ):
-        raise Conflict("Choose a work type and preferred location first.")
-    if step_id == "documents" and not profile.documents:
-        raise Conflict("Upload at least one document first.")
+    _validate_step(profile, step_id)
     step.status = "complete"
     step.completed_at = utcnow()
     _advance_steps(profile)
@@ -216,7 +430,7 @@ def add_document(
         raise Conflict("That file does not look like a PDF or Word document.")
     if len(content) > get_settings().max_upload_bytes:
         raise Conflict("The document is larger than 10 MB.")
-    _profile(db, user.id)  # Ensure the account owns a candidate profile.
+    _profile(db, user.id)
     document_id = str(uuid4())
     suffix = Path(filename).suffix.lower() or ".pdf"
     folder = get_settings().document_path / user.id

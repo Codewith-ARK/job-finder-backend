@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{(_TEMP / 'test.db').as_posix()}"
 os.environ["DEMO_LOGIN_ENABLED"] = "true"
 os.environ["SEED_ON_STARTUP"] = "false"
 os.environ["COOKIE_SECURE"] = "false"
+os.environ["DOCS_TESTING_ENABLED"] = "true"
 os.environ["DOCUMENT_DIR"] = (_TEMP / "documents").as_posix()
 
 import pytest

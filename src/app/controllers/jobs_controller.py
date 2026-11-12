@@ -24,8 +24,9 @@ router = APIRouter(tags=["jobs"])
 def read_workspace(
     context=Depends(current_agency_user), db: DbSession = Depends(get_db)
 ) -> JobsWorkspaceOut:
-    agency = require_agency(context)
-    return jobs_service.workspace(db, agency.id, context.user)
+    # Independent candidates have no agency; everyone else operates in their active agency.
+    agency_id = context.agency.id if context.agency else None
+    return jobs_service.workspace(db, agency_id, context.user)
 
 
 @router.post("/jobs", response_model=JobsWorkspaceOut)
@@ -55,8 +56,8 @@ def apply_to_job(
     context=Depends(require_candidate),
     db: DbSession = Depends(get_db),
 ) -> JobsWorkspaceOut:
-    agency = require_agency(context)
-    return jobs_service.apply_to_job(db, agency.id, context.user, job_id)
+    # Applications inherit the job's agency, so independent candidates can apply too.
+    return jobs_service.apply_to_job(db, context.user, job_id)
 
 
 @router.patch("/applications/{application_id}", response_model=JobsWorkspaceOut)

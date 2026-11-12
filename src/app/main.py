@@ -12,6 +12,7 @@ from .controllers import (
     candidates_controller,
     jobs_controller,
     platform_controller,
+    referrals_controller,
     staff_controller,
 )
 from .security import origin_allowed
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
         candidates_controller.router,
         staff_controller.router,
         jobs_controller.router,
+        referrals_controller.router,
         platform_controller.router,
     ):
         app.include_router(router, prefix=settings.api_prefix)
