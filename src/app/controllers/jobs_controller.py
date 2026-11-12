@@ -57,7 +57,9 @@ def apply_to_job(
     db: DbSession = Depends(get_db),
 ) -> JobsWorkspaceOut:
     # Applications inherit the job's agency, so independent candidates can apply too.
-    return jobs_service.apply_to_job(db, context.user, job_id)
+    return jobs_service.apply_to_job(
+        db, context.user, job_id, context.agency.id if context.agency else None
+    )
 
 
 @router.patch("/applications/{application_id}", response_model=JobsWorkspaceOut)

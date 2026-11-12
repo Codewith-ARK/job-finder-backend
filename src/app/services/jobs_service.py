@@ -155,8 +155,12 @@ def update_job(
     return workspace(db, agency_id, actor)
 
 
-def apply_to_job(db: DbSession, candidate: User, job_id: str) -> JobsWorkspaceOut:
+def apply_to_job(
+    db: DbSession, candidate: User, job_id: str, agency_id: str | None
+) -> JobsWorkspaceOut:
     job = db.get(Job, job_id)
+    if job and agency_id is not None and job.agency_id != agency_id:
+        raise NotFound("That job is no longer available.")
     if not job or job.status != "open":
         raise Conflict("That role is no longer accepting applications.")
     if not job.agency or job.agency.status != "active":
@@ -187,7 +191,7 @@ def apply_to_job(db: DbSession, candidate: User, job_id: str) -> JobsWorkspaceOu
         "success",
     )
     db.commit()
-    return workspace(db, job.agency_id, candidate)
+    return workspace(db, agency_id, candidate)
 
 
 def update_application(
