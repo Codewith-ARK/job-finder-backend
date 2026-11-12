@@ -24,6 +24,8 @@ ROLE_LABELS = {
     "supervisor": "Supervisor",
     "platform_admin": "Platform",
 }
+
+DUMMY_PASSWORD_HASH = hash_password(new_secret())
 ROLE_WORKSPACES = {
     "candidate": "candidate",
     "employee": "staff",
@@ -166,7 +168,10 @@ def login(
     db: DbSession, email: str, password: str, agency_id: str | None = None
 ) -> tuple[AuthContext, str, str]:
     user = db.scalar(select(User).where(User.email == normalize_email(email)))
-    if not user or not verify_password(password, user.password_hash):
+    valid_password = verify_password(
+        password, user.password_hash if user else DUMMY_PASSWORD_HASH
+    )
+    if not user or not valid_password:
         raise Unauthorized("Email or password is incorrect.")
     if not user.is_active:
         raise Unauthorized("This account is not active.")
