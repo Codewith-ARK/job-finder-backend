@@ -1,9 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from html import escape
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from .config import Settings, configuration_problems, get_settings
@@ -15,6 +17,8 @@ from .controllers import (
     referrals_controller,
     staff_controller,
 )
+from .database import SessionLocal
+from .models import User
 from .request_guards import RequestGuards
 from .security import origin_allowed
 from .seed import seed
@@ -26,6 +30,13 @@ logger = logging.getLogger("jobfinder")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
+    if settings.app_environment == "production":
+        with SessionLocal() as db:
+            if db.scalar(select(User.id).where(User.is_demo.is_(True)).limit(1)):
+                raise RuntimeError(
+                    "Production cannot use a seeded demo database. "
+                    "Provision a separate production database."
+                )
     if settings.seed_on_startup:
         try:
             seed()
@@ -41,7 +52,7 @@ def _docs_html(settings: Settings) -> str:
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{settings.app_name} — API docs</title>
+    <title>{escape(settings.app_name)} — API docs</title>
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"
@@ -96,7 +107,10 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version="1.0.0",
         lifespan=lifespan,
-        docs_url=None if settings.docs_testing_enabled else "/docs",
+        docs_url=None
+        if settings.docs_testing_enabled or settings.app_environment == "production"
+        else "/docs",
+        openapi_url=None if settings.app_environment == "production" else "/openapi.json",
         redoc_url=None,
     )
     app.add_middleware(
@@ -116,6 +130,10 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        if not response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+            )
         return response
 
     if settings.docs_testing_enabled:

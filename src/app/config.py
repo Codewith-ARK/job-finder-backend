@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field
@@ -12,6 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "Job Finder API"
+    app_environment: Literal["development", "test", "production"] = "development"
     api_prefix: str = "/api"
     database_url: str = "sqlite:///./data/jobfinder.db"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
@@ -19,8 +21,8 @@ class Settings(BaseSettings):
     # cookie into Swagger UI requests so /docs can exercise state changes.
     docs_testing_enabled: bool = False
 
-    session_cookie: str = "jf_session"
-    csrf_cookie: str = "jf_csrf"
+    session_cookie: str = Field(default="jf_session", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    csrf_cookie: str = Field(default="jf_csrf", pattern=r"^[A-Za-z0-9_-]{1,64}$")
     cookie_secure: bool = False
     session_days: int = 7
 
@@ -37,6 +39,8 @@ class Settings(BaseSettings):
     register_requests_per_minute: int = Field(default=5, ge=1, le=100)
     max_body_readers: int = Field(default=8, ge=1, le=64)
     body_timeout_seconds: int = Field(default=15, ge=1, le=60)
+    max_documents_per_candidate: int = Field(default=10, ge=1, le=100)
+    max_candidate_document_bytes: int = Field(default=50 * 1024 * 1024, ge=1, le=1024**3)
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -66,9 +70,7 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
     for raw in raw_origins:
         value = raw.strip()
         if not value:
-            problems.append(
-                ("warning", "CORS_ORIGINS contains an empty entry; it is ignored.")
-            )
+            problems.append(("warning", "CORS_ORIGINS contains an empty entry; it is ignored."))
             continue
         if value != raw:
             problems.append(
@@ -133,9 +135,7 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
             )
         )
     if settings.demo_login_enabled:
-        problems.append(
-            ("warning", "DEMO_LOGIN_ENABLED=true: demo persona sign-in is available.")
-        )
+        problems.append(("warning", "DEMO_LOGIN_ENABLED=true: demo persona sign-in is available."))
     if settings.seed_on_startup:
         problems.append(
             ("warning", "SEED_ON_STARTUP=true: an empty database is seeded at startup.")
@@ -156,4 +156,27 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
                 "consider a shorter session lifetime.",
             )
         )
+    if settings.session_cookie == settings.csrf_cookie:
+        problems.append(("error", "Session and CSRF cookies must have distinct names."))
+    if settings.app_environment == "production":
+        for unsafe, message in (
+            (not settings.cookie_secure, "Production requires COOKIE_SECURE=true."),
+            (settings.demo_login_enabled, "Production forbids DEMO_LOGIN_ENABLED=true."),
+            (settings.seed_on_startup, "Production forbids SEED_ON_STARTUP=true."),
+            (settings.docs_testing_enabled, "Production forbids DOCS_TESTING_ENABLED=true."),
+            (
+                not cleaned or any(not origin.startswith("https://") for origin in cleaned),
+                "Production requires explicit HTTPS CORS origins.",
+            ),
+            (
+                settings.session_days > 30 or settings.session_days < 1,
+                "Production sessions must expire within 1 to 30 days.",
+            ),
+        ):
+            if unsafe:
+                problems.append(("error", message))
+        problems = [
+            ("error" if "CORS_ORIGINS" in message else level, message)
+            for level, message in problems
+        ]
     return problems

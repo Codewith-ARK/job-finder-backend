@@ -4,6 +4,7 @@ from pathlib import Path
 
 _TEMP = Path(tempfile.mkdtemp(prefix="jobfinder-tests-"))
 os.environ["DATABASE_URL"] = f"sqlite:///{(_TEMP / 'test.db').as_posix()}"
+os.environ["APP_ENVIRONMENT"] = "test"
 os.environ["DEMO_LOGIN_ENABLED"] = "true"
 os.environ["SEED_ON_STARTUP"] = "false"
 os.environ["COOKIE_SECURE"] = "false"

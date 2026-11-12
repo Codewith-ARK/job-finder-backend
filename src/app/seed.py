@@ -78,6 +78,8 @@ def _seed_document(profile: CandidateProfile) -> None:
 def seed() -> bool:
     """Create the demo dataset when the database is empty. Returns True if seeded."""
 
+    if get_settings().app_environment == "production":
+        raise RuntimeError("Demo seeding is disabled in production.")
     with SessionLocal() as db:
         if db.scalar(select(Agency.id).limit(1)):
             return False

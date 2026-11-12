@@ -1,0 +1,47 @@
+# Review before deploying. Include inside Nginx's http {} context.
+# This loopback listener is for a trusted local TLS frontend proxy only.
+# If Nginx terminates public TLS, configure listen 443 ssl and real certificates.
+# All API workers must be reachable ONLY through this gateway.
+limit_req_zone $binary_remote_addr zone=jf_api:10m rate=2r/s;
+limit_req_zone $binary_remote_addr zone=jf_auth:10m rate=20r/m;
+limit_req_zone $binary_remote_addr zone=jf_upload:10m rate=10r/m;
+limit_conn_zone $binary_remote_addr zone=jf_connections:10m;
+
+server {
+    listen 127.0.0.1:8080;
+    server_name _;
+    client_max_body_size 256k;
+    client_body_timeout 15s;
+    client_header_timeout 10s;
+    limit_conn jf_connections 10;
+    limit_req_status 429;
+    limit_conn_status 429;
+
+    # Never trust client-supplied forwarding headers. If behind Cloudflare,
+    # configure real_ip with only verified Cloudflare CIDRs AND restrict ingress.
+    # Configure Uvicorn to trust only this proxy's actual address, never '*'.
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_request_buffering on;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+
+    location = /api/candidates/me/documents {
+        client_max_body_size 11m;
+        limit_req zone=jf_upload burst=2 nodelay;
+        limit_req zone=jf_api burst=10 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+    }
+    location ^~ /api/auth/ {
+        limit_req zone=jf_auth burst=5 nodelay;
+        limit_req zone=jf_api burst=10 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+    }
+    location /api/ {
+        limit_req zone=jf_api burst=10 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+    }
+    location / { return 404; }
+}
