@@ -78,7 +78,18 @@ async def upload_document(
     )
 
 
-@router.get("/me/documents/{document_id}")
+@router.get(
+    "/me/documents/{document_id}",
+    response_class=FileResponse,
+    responses={
+        200: {
+            "content": {
+                media_type: {"schema": {"type": "string", "format": "binary"}}
+                for media_type in candidates_service.ALLOWED_DOCUMENT_TYPES
+            }
+        }
+    },
+)
 def download_document(
     document_id: str,
     context=Depends(current_candidate),
