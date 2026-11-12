@@ -1,6 +1,6 @@
 # Backend agent rules
 
-Applies to this repository. Read workspace `../AGENTS.md`, this file, `CONTEXT.md`, `README.md`, `docs/ARCHITECTURE.md`, and the assigned task in `docs/PLAN.md`. Architecture v0.2 is approved. **The UI-first milestone and real feature integration are complete; remaining work is manual acceptance, deployment verification, and hardening.**
+Applies to this repository. Read workspace `../AGENTS.md`, this file, `CONTEXT.md`, `README.md`, `docs/ARCHITECTURE.md`, the active feature in `docs/FEATURE_TRACKER.md`, and the assigned task in `docs/PLAN.md`. Architecture v0.2 is approved. **The UI-first milestone and initial real feature integration are complete; active work is governed by the feature tracker.**
 
 ## Scope
 
@@ -50,7 +50,10 @@ Reviewed workflows and contracts guide implementation; mock role behavior is not
 - Application code lives in `src/app/`: `main.py` builds the FastAPI app, `config.py` uses pydantic-settings, `database.py` owns the engine/session/`Base`, and `models/`, `schemas/`, `services/`, `controllers/` follow the fixed MVC boundary. Root `main.py` only re-exports `app` for `fastapi dev main.py` and uvicorn.
 - Runtime dependencies are FastAPI, SQLAlchemy 2.x, Alembic, psycopg, pwdlib/Argon2, python-multipart, and email-validator. Dev dependencies are pytest and ruff.
 - `compose.yaml` runs PostgreSQL 17 and the API with persistent database/document volumes; the Dockerfile runs `alembic upgrade head` before uvicorn. Docker is not installed locally, so the PostgreSQL container path is unverified; local runs use SQLite through the same `DATABASE_URL` setting.
-- Alembic has one initial migration under `alembic/versions/`; `uv run alembic upgrade head` applies it. `uv run seed` is idempotent and skips non-empty databases. Startup seeding is controlled by `SEED_ON_STARTUP`.
+- Alembic has two reviewed migrations under `alembic/versions/`: the initial schema and `c4a9f1b2d7e8` (candidate independence, normalized profile tables, referral links). `uv run alembic upgrade head` applies both. `uv run seed` is idempotent and skips non-empty databases. Startup seeding is controlled by `SEED_ON_STARTUP`.
 - Sessions use sync SQLAlchemy request-scoped sessions (`get_db`), with services owning commits. Domain failures raise `ServiceError` subclasses and are rendered as FastAPI `{"detail": ...}` responses by a global handler.
 - Auth uses HttpOnly `jf_session`, mirrored `jf_csrf`/`X-CSRF-Token`, hashed opaque tokens, Argon2 passwords, and `Origin` checks on state changes. Role and agency authorization is resolved server-side; do not trust submitted role/agency IDs.
-- Tests use `fastapi.testclient.TestClient` against the configured database and a migration up/down test. Verified commands: `uv run pytest -q` (18 passed) and `uv run ruff check .` (clean). Run `uv run alembic upgrade head` before starting the API on a fresh database.
+- Candidate access is independent by default: `candidate_profiles.agency_id` is nullable, agency visibility comes from an active `memberships` row, and only referred candidates appear in an agency directory. Registration accepts an optional referral token; referral links are single-use, expiring, and stored hashed.
+- Onboarding is step-based (`personal → professional → academic → documents`) with partial saves and ordered completion. Preferences, experiences, education, and skills are normalized tables; `GET /candidates/me` returns the composed workspace.
+- `config.py` owns settings, validation, and the startup `configuration_problems()` audit; `.env` supplies values and `get_settings()` is cached, so restart after edits. `CORS_ORIGINS=*` aborts startup, and `DOCS_TESTING_ENABLED=true` enables a CSRF-aware `/docs` interceptor for local testing only.
+- Tests use `fastapi.testclient.TestClient` against the configured database plus a migration up/down test. Verified commands: `uv run pytest -q` (29 passed) and `uv run ruff check .` (clean). Run `uv run alembic upgrade head` before starting the API on a fresh database.

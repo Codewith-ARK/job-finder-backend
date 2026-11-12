@@ -2,7 +2,10 @@
 
 **Decision confirmed:** visualize the complete application workflow with mock data first; connect real APIs feature by feature afterward. Architecture v0.2 remains approved. Assign a task or explicit sequence; this document does not start implementation automatically.
 
-**Delivery status (10 November 2026):** T00–T06 complete. All documented features are implemented and verified locally. Remaining: owner manual acceptance, Docker/PostgreSQL execution, and deployment hardening (secure cookies, disable demo sign-in and startup seeding).
+**Delivery status (12 November 2026):** T00–T06 complete. F01 is delivered and verified locally:
+candidate independence, single-use agency referrals, and resumable normalized onboarding.
+Remaining: owner manual acceptance, F02 when assigned, and deployment hardening (secure cookies,
+disable demo sign-in and startup seeding).
 
 ## T00 — First-run inspection and local instructions
 
@@ -69,3 +72,68 @@ For each assigned feature:
 Never send mock-only IDs to real endpoints. Migrate dependent records together where necessary; name that related scope upfront. Isolated test fixtures may remain under tests, but must never reactivate runtime mock behavior.
 
 **Done:** the feature uses the real API, its acceptance checks pass, runtime mock references are gone, and frontend/backend CONTEXT status is updated. No fallback to mocks on failure.
+
+## F01 — Candidate identity independence, referral links, and resumable onboarding
+
+**Owner decision (12 November 2026):** full-stack delivery is authorized for this feature; the
+UI-first preview step is explicitly waived. The backend contract governs the UI. Development
+order is governed by [FEATURE_TRACKER.md](FEATURE_TRACKER.md); do not start F02 until F01 is
+accepted.
+
+**Status:** Done — 12 November 2026. See `FEATURE_TRACKER.md` for acceptance and evidence.
+
+**Goal:** one integrated signup + onboarding flow for individual and agency-referred candidates.
+Candidate profiles no longer require an agency. Referral links are single-use and expire.
+Onboarding is resumable across logout/login and stores normalized profile data.
+
+### F01.1 — Domain model and migration
+
+- Make `candidate_profiles.agency_id` nullable; keep it as the referring agency while
+  `memberships` remains the authorization source.
+- Add personal/profile fields, and normalize professional and academic data into
+  `candidate_preferences`, `candidate_experiences`, `candidate_education`, and
+  `candidate_skills`.
+- Add `referral_links` with a hashed token, expiry, single-use consumption, creator, agency, and
+  revocation.
+- Extend onboarding steps to `personal → professional → academic → documents`.
+- Migrate existing preference/skill data without dropping populated databases.
+- Update the seed with individual and referred candidates, normalized records, and referral
+  fixtures.
+
+### F01.2 — Backend APIs, authorization, and tests
+
+- Registration accepts an optional referral token. Individual registration creates no
+  membership; referral registration atomically consumes the token and creates membership +
+  assignment to the referrer.
+- Candidate sessions allow `agency = null`; staff sessions still require an active agency.
+- Add referral resolve (public), create/list/revoke (staff) endpoints with CSRF and role checks.
+- Add step-based onboarding save/complete endpoints with ordered transitions and validation.
+- Update candidate workspace output, job visibility, application output, and staff directory
+  queries for independent candidates.
+- Tests: individual/referral signup, single-use/expiry/revocation, resumable onboarding,
+  cross-agency denial, individual job visibility, staff isolation, migration up/down.
+
+### F01.3 — Zustand store and unified wizard
+
+- Add Zustand with persisted local draft state keyed by candidate, plus server autosave.
+- Build the Account → Personal → Professional → Academic → Documents → Review wizard.
+- Provide `/register`, `/join/[token]`, and resumable `/candidate/onboarding` entry points.
+- Keep unsaved edits on refresh/logout; on login, restore saved server data and merge the local
+  draft for the same user. Never store passwords or document files in local storage.
+
+### F01.4 — Referral management and application integration
+
+- Staff referral page with create, copy-once link, expiry, status, and revoke.
+- Candidate onboarding gate; referral context shown at signup and in the candidate workspace.
+- Individual candidate job browsing across active agencies; referred candidate agency jobs.
+- Candidate/profile/application views updated for the expanded profile and job context.
+
+### F01.5 — Verification and documentation
+
+- Backend: `uv run ruff check .`, `uv run pytest -q`, migration upgrade/downgrade.
+- Frontend: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and end-to-end HTTP smoke
+  for individual signup, referral signup, resume, completion, and staff referral management.
+- Update `EXECUTION.md`, `FLOWS.md`, `MANUAL_TESTING.md`, `ARCHITECTURE.md`, both `CONTEXT.md`
+  files, both observed-conventions sections, and `FEATURE_TRACKER.md`.
+
+**Done:** all F01 acceptance criteria in `FEATURE_TRACKER.md` pass and F02 remains untouched.

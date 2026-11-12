@@ -29,6 +29,7 @@ frontend/
     features/
       auth/
       candidates/
+      referrals/
       jobs/
         jobs.api.ts
         jobs.hooks.ts
@@ -43,7 +44,6 @@ frontend/
     lib/
       http.client.ts
       query.client.ts
-      mocks/                  # Shared development mock backing state
   public/
   tests/
   .env.example
@@ -119,6 +119,20 @@ In explicit mock mode: component → hook → feature API → development mock a
 Target one public origin: `/` serves Next.js and `/api/...` proxies to FastAPI. T00 records the existing mapping; foundation work establishes it if missing. Forward cookies correctly and document any prefix stripping. Avoid per-endpoint Next.js API wrappers.
 
 FastAPI validates sessions and authorizes agency, role, and record access. Host-only session cookies use `Path=/`, `HttpOnly`, a deliberate `SameSite` setting, and `Secure` under HTTPS. CSRF protection covers state-changing requests; cookie flags alone do not satisfy this rule. See [OWASP CSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
+
+**Candidate identity and agency access.** A candidate is a user with a `candidate_profiles` row whose
+`agency_id` may be `null`. Agency access is not implied by the profile column; it comes from an
+active `memberships` row created by a referral signup or an assignment. Staff authorization always
+resolves the active membership server-side, so independent candidates never appear in an agency
+directory. Candidate profile data is normalized into `candidate_preferences`,
+`candidate_experiences`, `candidate_education`, and `candidate_skills`; onboarding progress stays in
+`onboarding_steps` with a fixed `personal → professional → academic → documents` order.
+
+**Referral links.** `referral_links` stores a hashed single-use token with an expiry, creator,
+agency, and optional revocation timestamp. Public resolution describes the link without consuming
+it; registration consumes it atomically inside the same transaction that creates the user,
+membership, profile, and assignment. The raw token is returned once at creation and never stored in
+plaintext.
 
 Next.js can read incoming cookies in Server Components using `await cookies()`; only cookies actually sent to its host/path are available. Reading a cookie does not validate a session. Any future authenticated server client must explicitly forward relevant credentials and avoid shared caching of private responses. See [Next.js cookies](https://nextjs.org/docs/app/api-reference/functions/cookies).
 

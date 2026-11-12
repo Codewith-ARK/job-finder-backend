@@ -50,14 +50,18 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  start["Sign in at /demo or /login"] --> role{"Role is candidate?"}
-  role -- "No" --> deny["403 or redirect to own workspace"]
-  role -- "Yes" --> home["Candidate overview"]
+  start["/register, /join/&lt;token&gt;, or /login"] --> kind{"Signup path"}
+  kind -- "Independent" --> noagency["Account with no agency<br/>sees every open role"]
+  kind -- "Referral link" --> referred["Consume single-use link<br/>join agency + assignment"]
+  kind -- "Existing" --> home["Candidate overview"]
+  noagency --> home
+  referred --> home
   home --> done{"Onboarding complete?"}
-  done -- "No" --> steps["Next step in order:<br/>profile → preferences → documents"]
-  steps --> upload["Upload PDF or DOCX"]
-  upload --> finish["Finish onboarding at 100%"]
-  finish --> jobs["Browse agency jobs"]
+  done -- "No" --> steps["Resumable wizard:<br/>Account → Personal → Professional<br/>→ Academic → Documents → Review"]
+  steps --> save["Each step saves to the server;<br/>unsaved edits persist locally"]
+  save --> steps
+  steps --> finish["Finish onboarding at 100%"]
+  finish --> jobs["Browse roles<br/>(all agencies or referring agency)"]
   done -- "Yes" --> jobs
   jobs --> apply["Apply once per job"]
   apply --> submitted["Application: submitted"]
@@ -75,14 +79,18 @@ flowchart TD
   login["Staff sign in"] --> role{"Role"}
   role -- "Employee" --> read["Read agency candidates,<br/>teams, jobs, applications"]
   read --> status["Update application status"]
+  read --> referral["Create, list, revoke<br/>own referral links"]
   role -- "Supervisor" --> tools["Supervisor tools"]
   tools --> assign["Assign or reassign candidates"]
   tools --> team["Create, update,<br/>deactivate team members"]
   tools --> jobswrite["Create, update, close jobs"]
+  tools --> allreferrals["List every agency referral link"]
   assign --> pipeline["Pipeline, counts, and activity update"]
   team --> pipeline
   jobswrite --> pipeline
   status --> pipeline
+  referral --> pipeline
+  allreferrals --> pipeline
 ```
 
 ## 5. Request authorization decision
@@ -127,20 +135,51 @@ sequenceDiagram
   API-->>C: Application now shows interview
 ```
 
-## 7. Onboarding state
+## 7. Referral signup
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor R as Referrer (staff)
+  actor C as Candidate
+  participant Web as Next.js
+  participant API as FastAPI
+  participant DB as Database
+
+  R->>Web: Create referral link
+  Web->>API: POST /api/referrals (cookie + CSRF)
+  API->>DB: Store hashed token, expiry, creator, agency
+  API-->>R: Raw token + /join/&lt;token&gt; once
+
+  C->>Web: Open /join/&lt;token&gt;
+  Web->>API: GET /api/referrals/{token}
+  API-->>C: Agency + referrer + validity (not consumed)
+
+  C->>Web: Submit signup
+  Web->>API: POST /api/auth/register {referralToken}
+  API->>DB: Atomically consume link, create user,<br/>membership, candidate profile, assignment
+  API-->>C: Candidate session (referred)
+```
+
+Used, expired, revoked, and unknown links resolve as invalid and registration returns `409`;
+the token is consumed exactly once.
+
+## 8. Onboarding state
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Profile
-  Profile --> Preferences: complete profile
-  Preferences --> Documents: complete preferences
+  [*] --> Personal
+  Personal --> Professional: save + complete personal
+  Professional --> Academic: save + complete professional
+  Academic --> Documents: save + complete academic
   Documents --> Complete: upload document + finish
   Complete --> [*]
 ```
 
-Completing a step out of order is rejected with `409`. Editing an already completed profile or preference step remains allowed.
+Saving a step accepts partial data. Completing a later step first is rejected with `409`.
+Completed steps remain editable, and step data survives logout/login.
 
-## 8. Deployment
+## 9. Deployment
 
 ```mermaid
 flowchart LR
