@@ -20,6 +20,8 @@ from app.seed import seed
 
 @pytest.fixture(autouse=True)
 def fresh_database():
+    if hasattr(app.state, "request_guard"):
+        app.state.request_guard.reset()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     seed()

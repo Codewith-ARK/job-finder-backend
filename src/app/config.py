@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +31,12 @@ class Settings(BaseSettings):
 
     document_dir: str = "storage/documents"
     max_upload_bytes: int = 10 * 1024 * 1024
+    max_json_bytes: int = Field(default=256 * 1024, ge=1024, le=1024 * 1024)
+    requests_per_minute: int = Field(default=120, ge=1, le=10000)
+    auth_requests_per_minute: int = Field(default=20, ge=1, le=1000)
+    register_requests_per_minute: int = Field(default=5, ge=1, le=100)
+    max_body_readers: int = Field(default=8, ge=1, le=64)
+    body_timeout_seconds: int = Field(default=15, ge=1, le=60)
 
     @property
     def cors_origin_list(self) -> list[str]:

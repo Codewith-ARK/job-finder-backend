@@ -15,6 +15,7 @@ from .controllers import (
     referrals_controller,
     staff_controller,
 )
+from .request_guards import RequestGuards
 from .security import origin_allowed
 from .seed import seed
 from .services.errors import ServiceError
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
     ):
         app.include_router(router, prefix=settings.api_prefix)
 
+    app.add_middleware(RequestGuards, state=app.state)
     return app
 
 

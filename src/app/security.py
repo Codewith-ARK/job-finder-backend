@@ -5,12 +5,19 @@ from fastapi import Depends, Request, Response
 from sqlalchemy.orm import Session as DbSession
 
 from .config import get_settings
-from .database import get_db
+from .database import SessionLocal, get_db
 from .models import Agency, AuthSession, User
 from .services.auth_service import AuthContext, resolve_session, verify_csrf
 from .services.errors import Forbidden, Unauthorized
 
 STAFF_ROLES = ("employee", "supervisor")
+
+
+def validate_upload_request(request: Request) -> None:
+    """Reject uploads before multipart parsing; normal route checks still run."""
+    with SessionLocal() as db:
+        context = get_auth_context(request, db)
+        require_candidate(require_csrf(request, context))
 
 
 def get_auth_context(request: Request, db: DbSession = Depends(get_db)) -> AuthContext:
