@@ -5,8 +5,9 @@ from html import escape
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings, configuration_problems, get_settings
 from .controllers import (
@@ -22,6 +23,7 @@ from .models import User
 from .request_guards import RequestGuards
 from .security import origin_allowed
 from .seed import seed
+from .services import auth_service
 from .services.errors import ServiceError
 
 logger = logging.getLogger("jobfinder")
@@ -42,6 +44,13 @@ async def lifespan(_app: FastAPI):
             seed()
         except OperationalError:
             logger.warning("Database tables are missing. Run `uv run alembic upgrade head` first.")
+    try:
+        with SessionLocal() as db:
+            removed = auth_service.purge_sessions(db, settings.session_retention_days)
+        if removed:
+            logger.info("Removed %d expired or revoked session record(s).", removed)
+    except OperationalError:
+        logger.warning("Session cleanup skipped: database tables are missing.")
     yield
 
 
@@ -120,6 +129,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    if settings.trusted_host_list:
+        app.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=settings.trusted_host_list,
+            www_redirect=False,
+        )
 
     @app.middleware("http")
     async def origin_guard(request: Request, call_next):
@@ -130,7 +145,22 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        if not response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        if settings.hsts_seconds:
+            response.headers["Strict-Transport-Security"] = (
+                f"max-age={settings.hsts_seconds}; includeSubDomains"
+            )
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/html"):
+            # Only the local Swagger page serves HTML; allow its pinned CDN assets.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self' 'unsafe-inline' "
+                "https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' "
+                "https://cdn.jsdelivr.net; img-src 'self' data: https://cdn.jsdelivr.net; "
+                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+            )
+        else:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
             )
@@ -144,10 +174,30 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(_request: Request, error: ServiceError):
-        return JSONResponse({"detail": error.message}, status_code=error.status_code)
+        headers = {"Retry-After": str(error.retry_after)} if hasattr(error, "retry_after") else None
+        return JSONResponse(
+            {"detail": error.message}, status_code=error.status_code, headers=headers
+        )
+
+    @app.exception_handler(IntegrityError)
+    async def integrity_error_handler(_request: Request, _error: IntegrityError):
+        return JSONResponse(
+            {"detail": "That change conflicts with an existing record."},
+            status_code=409,
+        )
 
     @app.get(f"{settings.api_prefix}/health", tags=["health"])
     def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get(f"{settings.api_prefix}/ready", include_in_schema=False)
+    def readiness():
+        try:
+            with SessionLocal() as db:
+                db.execute(text("SELECT 1"))
+        except Exception:
+            logger.warning("Readiness check failed: database is unavailable.")
+            return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ok"}
 
     for router in (

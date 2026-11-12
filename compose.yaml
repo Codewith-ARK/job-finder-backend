@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: jobfinder
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique URL-safe database password}
@@ -12,13 +13,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # No published ports: only the api service may reach PostgreSQL.
 
   api:
     build: .
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     environment:
       DATABASE_URL: postgresql+psycopg://jobfinder:${POSTGRES_PASSWORD:?Set a unique URL-safe database password}@db:5432/jobfinder
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-production}
       CORS_ORIGINS: ${CORS_ORIGINS:?Set explicit HTTPS frontend origins}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
+      HSTS_SECONDS: ${HSTS_SECONDS:-0}
+      # The ASGI server only accepts forwarded client addresses from these hops.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       DEMO_LOGIN_ENABLED: ${DEMO_LOGIN_ENABLED:-false}
       SEED_ON_STARTUP: ${SEED_ON_STARTUP:-false}
@@ -30,6 +40,7 @@ services:
       db:
         condition: service_healthy
     ports:
+      # Loopback only: the Next.js server proxies /api/* to this address.
       - "127.0.0.1:8000:8000"
 
 volumes:

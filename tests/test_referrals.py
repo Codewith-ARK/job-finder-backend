@@ -179,9 +179,10 @@ def test_staff_referral_management_and_scope(sign_in):
     assert _register(use, "revoked@example.com", token).status_code == 409
 
 
-def test_individual_application_reaches_the_job_agency(client):
+def test_individual_application_reaches_the_job_agency(client, complete_onboarding):
     assert _register(client, "applicant@example.com").status_code == 200
     csrf = client.cookies.get("jf_csrf")
+    complete_onboarding(client, csrf)
     job = next(
         job
         for job in client.get("/api/jobs/workspace").json()["jobs"]

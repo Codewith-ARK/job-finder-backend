@@ -137,3 +137,46 @@ Onboarding is resumable across logout/login and stores normalized profile data.
   files, both observed-conventions sections, and `FEATURE_TRACKER.md`.
 
 **Done:** all F01 acceptance criteria in `FEATURE_TRACKER.md` pass and F02 remains untouched.
+
+## F03 — Security and deployment hardening
+
+**Status:** Active — implementation and SQLite verification complete 13 November 2026;
+PostgreSQL/container verification blocked. Governed by `FEATURE_TRACKER.md`; the findings and
+per-item notes are in `BUGS.md`.
+
+**Goal:** make the documented single-replica Compose deployment fail closed against the audit
+findings without changing the application architecture or frontend contract.
+
+### F03.1 — Configuration, throttling, and response hardening
+
+- Add settings for trusted hosts, HSTS, login lockout, session retention, and workspace caps.
+- Refuse unsafe production configuration at startup.
+- Add per-IP limits, failed-login lockout with `Retry-After`, and session purge.
+- Add `TrustedHostMiddleware`, HSTS, Permissions-Policy, CORP, CSP, `IntegrityError` → 409, and
+  `GET /api/ready`.
+
+### F03.2 — Authorization, onboarding, and document hardening
+
+- Fail closed for suspended agencies and inactive referrers.
+- Require complete onboarding before applying; invalidate steps when data is removed.
+- Guard the last supervisor and multi-agency global role changes.
+- Validate document structure, derive storage extensions from MIME type, enforce count/byte quotas,
+  and compensate failed upload/delete operations.
+- Reject blank required fields and cap tags, activity text, and workspace reads.
+
+### F03.3 — Container, Compose, and indexes
+
+- Run the image as an unprivileged user with a `/api/ready` healthcheck and trusted proxy hops.
+- Keep PostgreSQL unpublished and the API loopback-only; add `compose.production.yaml` with
+  required production values.
+- Add additive migration `a7d2e5c91f04` for workspace/session indexes.
+
+### F03.4 — Verification and documentation
+
+- `uv run ruff check .`, `uv run pytest -q` (74 passed), migration upgrade/downgrade on disposable
+  SQLite.
+- Update `BUGS.md`, `CONTEXT.md`, `README.md`, `EXECUTION.md`, both observed-conventions sections,
+  and `FEATURE_TRACKER.md`.
+
+**Blocked:** PostgreSQL/Compose execution, populated-migration findings BUG-003/004/005, and edge
+proxy settings. Do not mark F03 done until those run in a deployment-like environment.

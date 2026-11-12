@@ -14,6 +14,9 @@ A locally runnable production build with real persistence and authentication:
   same SQLAlchemy models and Alembic migrations against **SQLite** (`DATABASE_URL` default).
   No forked code paths: only the connection URL and driver differ.
 - Next.js production build served through `next start`, proxying `/api/*` to FastAPI.
+- One API replica behind that rewrite; the edge/CDN owns TLS, WAF, and per-IP limits. The API
+  container runs as an unprivileged user, publishes only on loopback, and healthchecks
+  `/api/ready`.
 - Seeded demo accounts are real database users; the demo chooser performs real logins.
 
 ## Identity and permissions
@@ -50,7 +53,8 @@ Rules:
   With `DOCS_TESTING_ENABLED=true` (local only), the API's own origin is also accepted and
   Swagger UI echoes the CSRF cookie, so `/docs` can exercise state-changing routes.
 - Login/register/logout and demo login are state changes; they clear/rotate tokens.
-- Sessions are revoked on logout, password change, and member deactivation.
+- Sessions are revoked on logout, password change, and member deactivation, and expired/revoked
+  rows are purged at startup after `SESSION_RETENTION_DAYS`.
 
 **Decision: cookie sessions, not JWT.** Authentication uses an opaque, database-backed session
 referenced by the HttpOnly `jf_session` cookie. No JWT is issued, no token is stored in
@@ -76,12 +80,42 @@ that matters for hosting:
 | `SEED_ON_STARTUP=true` | warning | An empty database is seeded at startup |
 | `COOKIE_SECURE=false` | warning | Session cookies may travel over plain HTTP |
 | `SESSION_DAYS>30` | warning | Long-lived sessions |
+| `TRUSTED_HOSTS` empty | warning | No `Host` allowlist; set the public host names in production |
+| `HSTS_SECONDS=0` in production | warning | No HSTS header; enable after HTTPS is verified |
+| Production with demo login, startup seeding, docs testing, insecure cookies, non-HTTPS origins, default DB credentials, or `SESSION_DAYS` outside 1–30 | error | Refuses to start |
 
 The audit never silently "fixes" a risky setting: it logs the effective interpretation, and any
 `error` entry aborts startup after the log line is written. Before hosting, set
 `COOKIE_SECURE=true`, `DOCS_TESTING_ENABLED=false`, `DEMO_LOGIN_ENABLED=false`,
-`SEED_ON_STARTUP=false`, and list explicit HTTPS origins. Keep `DOCS_TESTING_ENABLED=false` in
-shared environments; `/docs` then rejects its own origin for state-changing calls.
+`SEED_ON_STARTUP=false`, and list explicit HTTPS origins, `TRUSTED_HOSTS`, `HSTS_SECONDS`, and
+`FORWARDED_ALLOW_IPS`. Keep `DOCS_TESTING_ENABLED=false` in shared environments; `/docs` then
+rejects its own origin for state-changing calls.
+
+## Abuse controls and deployment boundary
+
+- **Per-IP request limits.** Every `/api/*` request counts against `REQUESTS_PER_MINUTE`; auth
+  mutations use `AUTH_REQUESTS_PER_MINUTE` and registration uses
+  `REGISTER_REQUESTS_PER_MINUTE`. Rejections return `429` with `Retry-After`.
+- **Per-account lockout.** Failed credentials count toward `LOGIN_MAX_FAILURES` within
+  `LOGIN_LOCKOUT_SECONDS`. Successful sign-ins reset the counter. A deliberate attacker can still
+  force a temporary lockout for a known account; the per-IP limit bounds the attempt rate, and the
+  lockout is the accepted cost of blocking online guessing.
+- **Body and upload bounds.** Mutations are capped by `MAX_JSON_BYTES` or `MAX_UPLOAD_BYTES`,
+  streamed with a timeout, and limited to `MAX_BODY_READERS` concurrent reads. Uploads are
+  authenticated before multipart parsing.
+- **Documents.** Structural PDF/DOCX/DOC checks, generated storage names from the validated MIME
+  type, and per-candidate count/byte quotas. Files are never served from a public path.
+- **Topology.** One API replica: edge/CDN (TLS, WAF, per-IP limits) -> Next.js `/api` rewrite ->
+  FastAPI on `127.0.0.1:8000`. In-process counters are not shared between replicas, so a second
+  replica requires the same per-IP limits at the edge or a shared store. Account lockout,
+  authorization, and body caps remain in the application.
+- **Proxy trust.** Uvicorn accepts `X-Forwarded-For` only from `FORWARDED_ALLOW_IPS`; never set
+  `*`. `TrustedHostMiddleware` enforces `TRUSTED_HOSTS` when configured.
+- **Session storage.** No JWT or browser-readable credential. Expired/revoked rows are deleted at
+  startup after `SESSION_RETENTION_DAYS`.
+- **Deployment.** The API container runs as an unprivileged user, publishes only on loopback,
+  runs migrations before uvicorn, and healthchecks `/api/ready`. `compose.production.yaml`
+  requires the public origin, host allowlist, HSTS max-age, and trusted proxy hop.
 
 ## Domain model
 
@@ -103,7 +137,15 @@ shared environments; `/docs` then rejects its own origin for state-changing call
 
 ## API contract (prefix `/api`)
 
-All errors use FastAPI's `{"detail": "..."}` shape and stable HTTP status codes.
+All errors use FastAPI's `{"detail": "..."}` shape and stable HTTP status codes. Throttled
+requests return `429` with `Retry-After`.
+
+### Health
+
+| Method | Path | Body | Result |
+| --- | --- | --- | --- |
+| GET | `/health` | — | `{status:"ok"}` liveness |
+| GET | `/ready` | — | `{status:"ok"}`; `503` when the database query fails |
 
 ### Auth
 
@@ -136,7 +178,12 @@ All errors use FastAPI's `{"detail": "..."}` shape and stable HTTP status codes.
 Onboarding order is `personal → professional → academic → documents`; completing a later step
 first is `409`. Each step accepts partial saves, and completing it requires the step's minimum
 fields. The documents step is completed by the final "finish onboarding" call, which also sets
-`onboardingComplete` and the profile stage to `review`.
+`onboardingComplete` and the profile stage to `review`. Saving or deleting data that invalidates a
+completed step reopens that step and later steps, so completion cannot report 100% with missing
+required data. Applying to a job (`POST /jobs/{id}/apply`) requires `onboardingComplete`; an
+incomplete candidate gets `409` and no application row is created. Documents are limited to
+`MAX_DOCUMENTS_PER_CANDIDATE` and `MAX_CANDIDATE_DOCUMENT_BYTES`; uploads are structurally
+validated and stored with an extension derived from the validated MIME type.
 
 ### Referrals
 
@@ -149,8 +196,9 @@ Public resolution never consumes a link. Creation returns the raw token once.
 | POST | `/referrals` | `{label,expiresInDays}` | `{link,token,path}` |
 | DELETE | `/referrals/{id}` | — | `ReferralLink[]` |
 
-Used, expired, revoked, and unknown tokens resolve as invalid and are rejected at registration
-with `409`.
+Used, expired, revoked, suspended-agency, or inactive-referrer tokens resolve as invalid and are
+rejected at registration with `409`. A link is inactive while its creator is disabled or no longer
+an active member of the agency. `resolve` reports `status: "inactive"`.
 
 ### Staff
 
@@ -161,6 +209,11 @@ with `409`.
 | PATCH | `/staff/candidates/{candidateId}/stage` | `{stage}` | Staff workspace |
 | POST | `/staff/members` | `{name,email,role,team}` | `{workspace, temporaryPassword}` |
 | PATCH | `/staff/members/{memberId}` | `{role?,team?,active?}` | Staff workspace |
+
+Team management only targets identities already holding employee/supervisor roles; a candidate
+target returns `403`. A supervisor cannot change the global role of a member who is active in
+another agency (`403`, platform administration owns that change). The last active supervisor of an
+agency cannot be demoted or deactivated (`409`).
 
 ### Jobs
 
@@ -217,15 +270,19 @@ database is empty. Demo login is disabled unless `DEMO_LOGIN_ENABLED=true`.
 
 ## Verification
 
-- Backend: 29 pytest checks covering auth (login/logout/expiry/CSRF), wrong-role and
-  cross-agency denial, candidate ownership, onboarding order, individual/referral signup,
-  single-use/expired/revoked referrals, normalized profile output, assignment/team/job/
-  application flows, platform role, configuration audit, and migration up/down.
+- Backend: 74 pytest checks covering auth (login/logout/expiry/CSRF, suspended agency, failed-login
+  lockout), wrong-role and cross-agency denial, candidate ownership, onboarding order and
+  invalidation, individual/referral signup, single-use/expired/revoked/inactive referral links,
+  normalized profile output, assignment/team/job/application flows, the onboarding apply gate,
+  platform role, configuration audit, upload and document quotas/integrity, request-body caps and
+  per-IP limits, readiness, session purge, and migration up/down with the workspace indexes.
+- `uv run ruff check .` is clean and `uv run pytest -q` reports 74 passed on 13 November 2026.
 - Migrations run from empty DB; seed is idempotent.
 - Frontend: Biome, typecheck, Node tests (draft merge/conversion/validation), production build
   (19 routes), and a 34-check HTTP smoke test against a fresh migrated database covering both
   signup paths, resume after logout/login, completion, job application, and referral management.
-- No claim of a check that was not run.
+- No claim of a check that was not run. PostgreSQL/Docker and the edge proxy remain unexecuted on
+  this workstation; BUG-003/004/005 and the Compose path are deployment prerequisites.
 
 ## Out of scope
 

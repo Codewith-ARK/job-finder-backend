@@ -1,13 +1,14 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, StringConstraints, field_validator
 
 from .common import ApiModel
 
 JobStatus = Literal["open", "closed"]
 ApplicationStatus = Literal["submitted", "review", "interview", "offer", "closed"]
 WorkType = Literal["Remote", "Hybrid", "On-site"]
+JobTag = Annotated[str, StringConstraints(max_length=40, strip_whitespace=True)]
 
 
 class JobOut(ApiModel):
@@ -48,9 +49,23 @@ class JobInput(ApiModel):
     company: str = Field(min_length=1, max_length=160)
     location: str = Field(min_length=1, max_length=160)
     work_type: WorkType
-    salary: str = Field(max_length=80)
-    tags: list[str] = Field(default_factory=list, max_length=12)
+    salary: str = Field(default="", max_length=80)
+    tags: list[JobTag] = Field(default_factory=list, max_length=12)
     description: str = Field(default="", max_length=2000)
+
+    @field_validator("title", "company", "location", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("This field is required.")
+        return value
+
+    @field_validator("salary", "description", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class JobPatch(ApiModel):
@@ -59,9 +74,23 @@ class JobPatch(ApiModel):
     location: str | None = Field(default=None, max_length=160)
     work_type: WorkType | None = None
     salary: str | None = Field(default=None, max_length=80)
-    tags: list[str] | None = Field(default=None, max_length=12)
+    tags: list[JobTag] | None = Field(default=None, max_length=12)
     description: str | None = Field(default=None, max_length=2000)
     status: JobStatus | None = None
+
+    @field_validator("title", "company", "location", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("This field cannot be blank.")
+        return value
+
+    @field_validator("salary", "description", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ApplicationStatusInput(ApiModel):

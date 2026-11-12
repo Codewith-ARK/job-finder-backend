@@ -115,6 +115,15 @@ class ExperienceInput(ApiModel):
     current: bool = False
     description: str = Field(default="", max_length=1000)
 
+    @field_validator("company", "title", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("This field is required.")
+        return value
+
     @model_validator(mode="after")
     def validate_dates(self) -> ExperienceInput:
         if self.current:
@@ -161,6 +170,15 @@ class EducationInput(ApiModel):
     start_year: int = Field(ge=1950, le=2100)
     end_year: int | None = Field(default=None, ge=1950, le=2100)
     grade: str = Field(default="", max_length=40)
+
+    @field_validator("institution", "degree", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("This field is required.")
+        return value
 
     @model_validator(mode="after")
     def validate_years(self) -> EducationInput:

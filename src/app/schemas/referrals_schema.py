@@ -10,7 +10,7 @@ ReferralStatus = Literal["active", "used", "expired", "revoked"]
 
 class ReferralResolveOut(ApiModel):
     valid: bool
-    status: Literal["active", "used", "expired", "revoked", "unknown"]
+    status: Literal["active", "used", "expired", "revoked", "inactive", "unknown"]
     agency_name: str = ""
     referrer_name: str = ""
     label: str = ""

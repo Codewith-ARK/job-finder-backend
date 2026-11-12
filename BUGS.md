@@ -40,6 +40,16 @@
 
 Audit date: **12 November 2026**, Asia/Karachi. **37 findings: 8 High, 24 Medium, 5 Low; no Critical finding established.**
 
+## Remediation status — 13 November 2026
+
+A follow-through pass closed every finding that can be verified without PostgreSQL, plus the deployment hardening the audit left undecided. Current status: **32 fixed**, **1 mitigated** (pagination, BUG-026), **1 not reproducible** (BUG-023), and **3 blocked** on a disposable PostgreSQL run (BUG-003/004/005).
+
+- Verified locally: `uv run ruff check .` clean; `uv run pytest -q` -> 74 passed, including the hardening suite and an upgrade/downgrade migration test on disposable SQLite.
+- Recorded topology decision: one API replica, edge/CDN -> Next.js `/api` rewrite -> FastAPI on loopback. Per-IP limits run in process; a second replica must move those limits to the edge or a shared store. The application still fails closed (account lockout, body caps, authorization) without the edge.
+- Production startup refuses unsafe settings; see `compose.production.yaml`, `Dockerfile`, and `docs/EXECUTION.md#configuration-safety-and-hosting`.
+- Deployment prerequisites, not verified here: run the migrations and readiness probe against PostgreSQL; confirm the backfill and downgrade findings BUG-003/004/005 there before importing real data; terminate TLS and add WAF/edge rate limits at the proxy; keep port 8000 off the public internet. Uploaded files are structurally validated, not malware-scanned.
+
+
 ## Scope, evidence, and safety
 
 The audit began against the backend working tree, including uncommitted F01 referral/onboarding changes, above commit 229d27d. HEAD advanced during the audit to 0d1af6b (following implementation commit 84ce937). Final SHA-256 comparison confirmed that all 47 audited source, test, and migration files still matched the tested snapshot. Existing changes were preserved; the final Git status contained only untracked BUGS.md. The only file authored by this audit is this report; no fixes, dependency changes, commits, or feature-status changes were made by the audit.
@@ -165,10 +175,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-003] PostgreSQL backfill inserts an integer into a boolean column
 
-- **Status:** Not reproducible
+- **Status:** Blocked: needs PostgreSQL verification
 - **What changed:** No implementation change for this finding.
 - **Test added:** None; not closed.
-- **Notes:** Verification blocked, not a false-positive determination. PostgreSQL is unavailable; integer/boolean failure cannot be re-run. Existing migration is applied history: choose a reviewed release/repair strategy rather than editing it blindly. Recommend disposable PostgreSQL verification before any deployment.
+- **Notes:** Deployment prerequisite: Docker and PostgreSQL are unavailable on this workstation. Verification blocked, not a false-positive determination. PostgreSQL is unavailable; integer/boolean failure cannot be re-run. Existing migration is applied history: choose a reviewed release/repair strategy rather than editing it blindly. Recommend disposable PostgreSQL verification before any deployment.
 
 - **Category:** Data integrity
 - **Severity:** High
@@ -180,10 +190,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-004] Migrated completed candidates cannot reach the new academic step
 
-- **Status:** Not reproducible
+- **Status:** Blocked: needs PostgreSQL verification
 - **What changed:** No implementation change for this finding.
 - **Test added:** None; not closed.
-- **Notes:** Verification blocked, not a false-positive determination. Reproduction requires executing the existing data-altering migration, prohibited for this task. Recommend a reviewed forward-only repair migration; choose whether legacy completion is grandfathered or revalidated.
+- **Notes:** Deployment prerequisite: Docker and PostgreSQL are unavailable on this workstation. Verification blocked, not a false-positive determination. Reproduction requires executing the existing data-altering migration, prohibited for this task. Recommend a reviewed forward-only repair migration; choose whether legacy completion is grandfathered or revalidated.
 
 - **Category:** Functional
 - **Severity:** High
@@ -195,10 +205,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-005] Downgrade silently deletes independent candidate profiles
 
-- **Status:** Not reproducible
+- **Status:** Blocked: needs PostgreSQL verification
 - **What changed:** No implementation change for this finding.
 - **Test added:** None; not closed.
-- **Notes:** Verification blocked, not a false-positive determination. Destructive downgrade reproduction is expressly prohibited. Do not interpret this as a false positive. Recommend a guard refusing incompatible downgrade; backup/export and rollback policy need approval.
+- **Notes:** Deployment prerequisite: Docker and PostgreSQL are unavailable on this workstation. Verification blocked, not a false-positive determination. Destructive downgrade reproduction is expressly prohibited. Do not interpret this as a false positive. Recommend a guard refusing incompatible downgrade; backup/export and rollback policy need approval.
 
 - **Category:** Data integrity
 - **Severity:** High
@@ -210,10 +220,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-006] Authentication and registration have no abuse throttling
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose deployed gateway/shared-store rate limiting versus application enforcement. Recommend deployment-level IP/account limits with a shared backend; process-local counters alone are bypassable across workers. New 429/retry behavior and thresholds require client review.
+- **Status:** Fixed
+- **What changed:** src/app/config.py; src/app/request_guards.py; src/app/throttle.py; src/app/services/auth_service.py; src/app/services/errors.py; src/app/main.py
+- **Test added:** tests/test_request_guards.py::test_login_attempts_are_limited; tests/test_production_hardening.py::test_failed_logins_lock_the_account_without_breaking_successful_ones
+- **Notes:** Per-IP limits bound every API path, with a tighter budget for auth and registration. Per-account lockout counts only failed credentials and resets on a successful sign-in, so ordinary successful traffic never locks an account; repeated failures return 429 with Retry-After. A deliberate attacker can still force a temporary lockout for a known account, which is the accepted cost of failure-based lockout and is bounded by the per-IP limit. Limits remain process-local and assume one API replica: a second replica requires the same limits at the deployed edge. Thresholds are configuration values (LOGIN_MAX_FAILURES, LOGIN_LOCKOUT_SECONDS, *_REQUESTS_PER_MINUTE) and can still be tuned after client review.
 
 - **Category:** Security
 - **Severity:** High
@@ -225,10 +235,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-007] Compose defaults expose privileged demo access and a fixed-password database
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Demo deployment settings are deliberate prototype policy, not evidence of an exposed production deployment. Choose separate production Compose or strict startup environment mode. Recommend private DB networking, required environment credentials, secure cookies, no demo/seeding in production.
+- **Status:** Fixed
+- **What changed:** src/app/config.py; compose.yaml; compose.production.yaml; Dockerfile; .env.example
+- **Test added:** tests/test_config.py; tests/test_production_security.py::test_production_rejects_unsafe_configuration
+- **Notes:** Production refuses demo login, startup seeding, docs testing, insecure cookies, non-HTTPS origins, development database credentials, and out-of-range session lifetimes. PostgreSQL has no published port; the API publishes on loopback only. compose.production.yaml requires the public origin, host allowlist, HSTS max-age, and trusted proxy hop. Demo accounts remain available only when explicitly enabled locally.
 
 - **Category:** Security
 - **Severity:** High
@@ -240,10 +250,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-008] Unauthenticated uploads are fully spooled before authorization and size checks
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. An early streaming body/auth guard must cover chunked bodies, multipart overhead, reverse proxy limits and all worker paths. Choose gateway limits plus application streaming cap; recommend both. Requires reviewed size/status contract (413 versus existing 409/401), not just a Content-Length check.
+- **Status:** Fixed
+- **What changed:** src/app/request_guards.py; src/app/security.py
+- **Test added:** tests/test_request_guards.py::test_unauthorized_upload_body_is_not_read; ::test_forged_upload_session_is_denied_before_parsing; ::test_chunked_body_limit_without_content_length
+- **Notes:** The guard authenticates the upload and checks content length before multipart parsing, caps the streamed body, times out slow uploads, and limits concurrent readers. Client addresses must be validated by the ASGI server's proxy policy; the container trusts only FORWARDED_ALLOW_IPS.
 
 - **Category:** Security
 - **Severity:** High
@@ -255,10 +265,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-009] Applications bypass onboarding entirely
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Existing tests intentionally apply with incomplete onboarding. Choose grandfathered applications versus enforced completion for new applications. Recommend enforce completion after BUG-010; requires coordinated client denial/status behavior.
+- **Status:** Fixed
+- **What changed:** src/app/services/jobs_service.py; tests/conftest.py; tests/test_api.py; tests/test_audit_jobs.py; tests/test_referrals.py
+- **Test added:** tests/test_production_hardening.py::test_applying_requires_complete_onboarding
+- **Notes:** Applying now requires every onboarding step to be complete and still valid; incomplete candidates receive 409 and no application row is created. Existing API tests complete onboarding first. The frontend already gated this path, so the change closes the backend bypass without a contract change.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -270,10 +280,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-010] Invalidated onboarding data still reports 100% complete
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose step invalidation policy after edits/deletion, including resetting later steps and grandfathered completed candidates. Recommend invalidate from the earliest currently invalid required step. This changes completion/gating behavior and needs coordinated client review.
+- **Status:** Fixed
+- **What changed:** src/app/services/candidates_service.py
+- **Test added:** tests/test_production_hardening.py::test_deleting_the_last_document_invalidates_onboarding
+- **Notes:** Completing a step revalidates its saved data. Saving or deleting data that invalidates a completed step demotes that step to next and later steps to upcoming, so completion cannot report 100% while a required value is missing. Removing the last document invalidates the documents step.
 
 - **Category:** Data integrity
 - **Severity:** Medium
@@ -300,10 +310,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-012] Agency supervisors can change authority in other agencies
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Global roles are explicitly approved architecture. Choose restricting global role edits to platform authority versus agency-scoped capabilities. Recommend restrict global changes first; do not silently introduce a new role model.
+- **Status:** Fixed
+- **What changed:** src/app/services/staff_service.py
+- **Test added:** tests/test_production_hardening.py::test_multi_agency_role_change_requires_platform_administration
+- **Notes:** A supervisor can no longer change the global role of a member who also holds an active membership in another agency; that authority is reserved for platform administration. Team and active-flag changes remain available, and same-agency role changes still work.
 
 - **Category:** Architecture
 - **Severity:** Medium
@@ -330,10 +340,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-014] The last supervisor can demote themselves and strand agency administration
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose successor requirement versus platform recovery path. Recommend preventing final-supervisor demotion with a reviewed conflict response, including concurrent demotions and other-agency effects.
+- **Status:** Fixed
+- **What changed:** src/app/services/staff_service.py
+- **Test added:** tests/test_production_hardening.py::test_last_supervisor_cannot_demote_themselves
+- **Notes:** Demoting or deactivating the last active supervisor of an agency returns 409. Deactivation already disabled the identity; the guard now prevents an agency from being left without administration.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -345,10 +355,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-015] Referral signup assigns candidates to inactive referrers
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose revoking outstanding referrals versus reassigning their future candidates when staff leave. Recommend fail-closed signup until an active referrer is designated, with transactional recheck and client-visible explanation.
+- **Status:** Fixed
+- **What changed:** src/app/services/referrals_service.py
+- **Test added:** tests/test_production_hardening.py::test_deactivated_referrer_link_is_rejected
+- **Notes:** A link resolves as inactive and registration returns 409 when its creator is inactive, lost the agency membership, or is no longer staff. Resolution and consumption share the same eligibility check.
 
 - **Category:** Data integrity
 - **Severity:** Medium
@@ -360,10 +370,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-016] Suspended-agency referral links resolve as valid
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose resolver status/reason for suspended agencies within the existing status enum. Recommend valid:false plus a reason without treating temporary suspension as token revocation; coordinate with BUG-015/017.
+- **Status:** Fixed
+- **What changed:** src/app/services/referrals_service.py; src/app/schemas/referrals_schema.py
+- **Test added:** tests/test_production_hardening.py::test_referral_resolution_reports_suspended_agency
+- **Notes:** A suspended agency makes the link resolve with status inactive and valid false, and consumption returns 409. The resolve status contract gains inactive; existing statuses are unchanged.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -375,10 +385,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-017] Login to a suspended agency succeeds with an unusable session
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose default fallback to another active agency versus explicit agency selection/denial. Recommend explicit eligibility checks and a documented denial response; do not silently change 200 login behavior for multi-agency clients.
+- **Status:** Fixed
+- **What changed:** src/app/services/auth_service.py
+- **Test added:** tests/test_production_hardening.py::test_suspended_agency_login_is_rejected
+- **Notes:** Login rejects accounts whose memberships are all in suspended agencies with 403 and no session cookie, and an explicitly requested suspended agency is also rejected. Platform administrators still require no agency. Password verification happens first, so suspended-agency attempts do not leak account state differently.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -390,10 +400,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-018] Concurrent duplicate registration and application return unhandled 500s
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Requires translating uniqueness conflicts with transaction rollback across registration, applications, staff creation and team creation. Recommend targeted constraint mapping and deterministic PostgreSQL competing-transaction tests; coordinate newly controlled 409 behavior instead of current 500.
+- **Status:** Fixed
+- **What changed:** src/app/main.py
+- **Test added:** tests/test_api.py::test_register_login_and_duplicate_email; tests/test_production_hardening.py::test_unexpected_integrity_error_returns_conflict
+- **Notes:** Explicit duplicate checks remain the normal 409 path. A global IntegrityError handler now maps a losing concurrent insert to 409 instead of an unhandled 500. The handler is covered directly; the concurrency race itself was not load-tested.
 
 - **Category:** Data integrity
 - **Severity:** Medium
@@ -405,10 +415,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-019] Document filesystem and database writes can diverge on failure
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Filesystem and database cannot share one atomic transaction. Choose staging/compensation versus durable pending-deletion metadata/reconciliation. Recommend staged uploads plus retryable tombstones; broader schema/storage failure handling needs review.
+- **Status:** Fixed
+- **What changed:** src/app/services/candidates_service.py
+- **Test added:** tests/test_production_hardening.py::test_upload_removes_the_file_when_the_database_write_fails
+- **Notes:** Upload writes the file, commits metadata, and unlinks the file if the write fails. Delete renames the file to a hidden tombstone, deletes metadata, and restores the file if the database step fails. A leftover tombstone is logged and is never downloadable.
 
 - **Category:** Data integrity
 - **Severity:** Medium
@@ -420,10 +430,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-020] Four signature bytes are enough to pass document validation
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose document structural validation and malware policy. Recommend bounded parser-based validation; ZIP signature checks do not validate DOCX and a four-byte PDF check is insufficient. Dependency and accepted-file compatibility review required.
+- **Status:** Fixed
+- **What changed:** src/app/services/candidates_service.py
+- **Test added:** tests/test_document_limits.py::test_document_structure_must_match_its_type; ::test_storage_extension_comes_from_type
+- **Notes:** Validation now requires a complete PDF trailer, a DOCX zip containing [Content_Types].xml and word/document.xml, or the OLE header for DOC. Stored extensions come from the validated MIME type, not the submitted filename. This is structural validation, not malware scanning.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -435,10 +445,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-021] Unbounded upload filenames can produce filesystem errors
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose display-name limit and extension policy/status. Recommend deriving disk extensions from validated MIME/structure and a bounded display filename; review new validation rejection with clients and both OS paths.
+- **Status:** Fixed
+- **What changed:** src/app/services/candidates_service.py
+- **Test added:** tests/test_document_limits.py::test_long_filename_returns_validation_error
+- **Notes:** Filenames are reduced to a basename, length-bounded, and rejected when empty, dot-only, or containing control characters. Stored names are generated IDs; the original name is metadata only.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -450,10 +460,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-022] Whitespace and empty strings bypass required-field validation
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose normalization/password whitespace and required-field policy. Recommend normalize human text before validation, preserve password bytes, reject blank required job/academic fields. Tightened schemas/status behavior needs client review.
+- **Status:** Fixed
+- **What changed:** src/app/schemas/auth_schema.py; src/app/schemas/jobs_schema.py; src/app/schemas/candidates_schema.py; src/app/schemas/staff_schema.py
+- **Test added:** tests/test_production_hardening.py::test_blank_and_oversized_inputs_are_rejected
+- **Notes:** Required free-text fields are trimmed and rejected when blank; optional text is trimmed; whitespace-only passwords are rejected while password bytes are preserved. Validation runs at the schema boundary for registration, jobs, onboarding, and team members.
 
 - **Category:** Functional
 - **Severity:** Medium
@@ -480,10 +490,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-024] Job tag strings have no size bound
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose per-tag and aggregate sizes. Recommend short tags and a total JSON body limit; reject rather than silently truncate, with client validation/status review.
+- **Status:** Fixed
+- **What changed:** src/app/schemas/jobs_schema.py
+- **Test added:** tests/test_production_hardening.py::test_blank_and_oversized_inputs_are_rejected
+- **Notes:** Each tag is trimmed and capped at 40 characters, and the existing 12-tag limit is unchanged. Oversized tags now return 422 instead of a database error.
 
 - **Category:** Performance
 - **Severity:** Medium
@@ -495,10 +505,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-025] Document storage has no per-user count or aggregate quota
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose per-candidate count/byte quotas and replacement/deletion policy. Recommend atomic aggregate quota enforcement, with storage ownership and capacity policy approved first.
+- **Status:** Fixed
+- **What changed:** src/app/config.py; src/app/services/candidates_service.py
+- **Test added:** tests/test_document_limits.py::test_document_count_quota; ::test_document_aggregate_quota
+- **Notes:** Per-candidate limits of MAX_DOCUMENTS_PER_CANDIDATE (default 10) and MAX_CANDIDATE_DOCUMENT_BYTES (default 50 MB) are enforced while holding a per-candidate lock, before the file is written. The lock is in-process on SQLite and a row lock on PostgreSQL.
 
 - **Category:** Performance
 - **Severity:** Medium
@@ -510,10 +520,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-026] Workspaces and referral lists grow without pagination
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Pagination/filtering and narrower mutation responses change the shared web/mobile contract. Recommend additive bounded resource endpoints and staged client migration; retain existing routes until conversion is verified.
+- **Status:** Mitigated
+- **What changed:** src/app/config.py; src/app/services/jobs_service.py; src/app/services/staff_service.py; src/app/services/candidates_service.py
+- **Test added:** No dedicated test; existing workspace suites exercise the capped queries.
+- **Notes:** Every workspace list query now has a deterministic order and a hard row cap (MAX_WORKSPACE_ITEMS, default 500), bounding response work. This is not real pagination: clients cannot page past the cap and no cursor or limit contract exists. Pagination remains backlog work.
 
 - **Category:** Performance
 - **Severity:** Medium
@@ -540,10 +550,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-028] Tenant filters and session revocation lack supporting indexes
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Requires reviewed additive index migration and canonical PostgreSQL query plans. Recommend tenant/time and user/revocation indexes driven by actual workloads; do not alter applied migrations or apply schema changes here.
+- **Status:** Fixed
+- **What changed:** alembic/versions/a7d2e5c91f04_workspace_indexes.py; tests/test_migrations.py
+- **Test added:** tests/test_migrations.py::test_migrations_create_and_drop_schema
+- **Notes:** Additive migration a7d2e5c91f04 adds tenant and session indexes for jobs, applications, activities, auth_sessions, memberships, candidate_assignments, and referral_links. Upgrade and downgrade pass on a disposable SQLite database; PostgreSQL execution is a deployment prerequisite.
 
 - **Category:** Performance
 - **Severity:** Medium
@@ -585,10 +595,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-031] Expired and revoked session rows have no cleanup policy
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose session retention/audit requirements and scheduled cleanup ownership. Recommend bounded expiration/revocation cleanup with supporting indexes. No deletion of existing session data is authorized in this task.
+- **Status:** Fixed
+- **What changed:** src/app/config.py; src/app/services/auth_service.py; src/app/main.py
+- **Test added:** tests/test_production_hardening.py::test_expired_sessions_are_purged
+- **Notes:** Startup deletes expired or revoked session rows older than SESSION_RETENTION_DAYS (default 7). Runtime validation already rejected expired and revoked sessions; this bounds table growth. A failed purge is logged and does not block startup.
 
 - **Category:** Architecture
 - **Severity:** Medium
@@ -600,10 +610,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-032] Repeated onboarding saves replace record IDs despite supplied IDs
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Choose stable child-record update semantics versus documented replace-all. Recommend ID-aware ownership-checked reconciliation; review removed/unknown IDs and stale concurrent autosaves before changing collection lifecycle.
+- **Status:** Fixed
+- **What changed:** src/app/services/candidates_service.py
+- **Test added:** tests/test_production_hardening.py::test_onboarding_child_ids_are_stable
+- **Notes:** Experience and education saves reuse the row with the supplied id and only create rows without one, so autosave no longer churns identifiers. Lookups are scoped to the loaded candidate profile, so a foreign id cannot address another candidate's row.
 
 - **Category:** Data integrity
 - **Severity:** Medium
@@ -645,10 +655,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-035] Health endpoint provides no database readiness signal
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Constant health is valid liveness rather than a reproduced auth/functional exploit. Choose an additive readiness endpoint and deployment healthcheck. Recommend separate readiness; adding a route requires explicit contract review.
+- **Status:** Fixed
+- **What changed:** src/app/main.py
+- **Test added:** tests/test_production_hardening.py::test_readiness_endpoint_reports_database
+- **Notes:** GET /api/ready runs SELECT 1 and returns 200 ok or 503 unavailable; GET /api/health stays a liveness check. The container healthcheck calls /api/ready.
 
 - **Category:** Architecture
 - **Severity:** Low
@@ -660,10 +670,10 @@ A question mark means optional; array maximums and string limits live in src/app
 
 ### [BUG-036] Direct API and docs responses omit browser hardening headers
 
-- **Status:** Needs human decision
-- **What changed:** No implementation change for this finding.
-- **Test added:** None; not closed.
-- **Notes:** Deferred on the contract/design grounds below; original audit reproduction was not rerun in this fix pass. Basic nosniff/frame/referrer protections were added with BUG-029. Docs CSP, TLS/HSTS and proxy responsibilities remain unverified. Recommend docs-compatible CSP and HSTS only at the trusted HTTPS terminator; do not impose a guessed policy.
+- **Status:** Fixed
+- **What changed:** src/app/main.py; src/app/config.py; Dockerfile; compose.yaml; compose.production.yaml
+- **Test added:** tests/test_audit_headers.py; tests/test_production_security.py
+- **Notes:** Adds Permissions-Policy, Cross-Origin-Resource-Policy, and a restrictive CSP to every response (with a Swagger-only HTML policy), optional HSTS via HSTS_SECONDS, TrustedHostMiddleware when TRUSTED_HOSTS is set, and forwarded-header trust only for FORWARDED_ALLOW_IPS. The documented topology is edge or CDN to the Next.js rewrite to FastAPI on loopback. No proxy is deployed or tested here, so TLS, WAF, and edge per-IP limits remain a hosting decision.
 
 - **Category:** Security
 - **Severity:** Low

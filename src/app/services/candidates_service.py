@@ -1,4 +1,9 @@
+import io
+import logging
+import zipfile
+from contextlib import contextmanager
 from pathlib import Path
+from threading import RLock
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -33,6 +38,9 @@ from ..schemas.candidates_schema import (
     ReferralContextOut,
 )
 from .errors import Conflict, Forbidden, NotFound
+from .text import MAX_ACTIVITY_DETAIL, MAX_ACTIVITY_TITLE, clip
+
+logger = logging.getLogger("jobfinder")
 
 ONBOARDING = (
     (
@@ -63,6 +71,21 @@ ALLOWED_DOCUMENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 MAX_SKILLS = 30
+_DOCUMENT_LOCKS = tuple(RLock() for _ in range(64))
+
+
+@contextmanager
+def _document_lock(db: DbSession, user_id: str):
+    # SQLite development uses process locks; PostgreSQL also serializes replicas by row.
+    with _DOCUMENT_LOCKS[hash(user_id) % len(_DOCUMENT_LOCKS)]:
+        candidate_id = db.scalar(
+            select(CandidateProfile.user_id)
+            .where(CandidateProfile.user_id == user_id)
+            .with_for_update()
+        )
+        if candidate_id is None:
+            raise NotFound("A candidate profile has not been created for this account.")
+        yield
 
 
 def _profile_query(user_id: str):
@@ -77,6 +100,7 @@ def _profile_query(user_id: str):
             selectinload(CandidateProfile.skills),
         )
         .where(CandidateProfile.user_id == user_id)
+        .execution_options(populate_existing=True)
     )
 
 
@@ -265,25 +289,27 @@ def save_personal(db: DbSession, user: User, payload: PersonalStepInput) -> Cand
     if "portfolio_url" in payload.model_fields_set:
         profile.portfolio_url = payload.portfolio_url.strip()
     profile.updated_at = utcnow()
+    _reconcile_steps(profile)
     db.commit()
     return workspace(db, user)
 
 
 def _replace_experiences(profile: CandidateProfile, payload: ProfessionalStepInput) -> None:
-    profile.experiences.clear()
+    existing = {item.id: item for item in profile.experiences}
+    kept: list[CandidateExperience] = []
     for item in payload.experiences:
-        profile.experiences.append(
-            CandidateExperience(
-                candidate_id=profile.user_id,
-                company=item.company.strip(),
-                title=item.title.strip(),
-                location=item.location.strip(),
-                start_date=item.start_date,
-                end_date=None if item.current else item.end_date,
-                current=item.current,
-                description=item.description.strip(),
-            )
-        )
+        experience = existing.get(item.id) if item.id else None
+        if experience is None:
+            experience = CandidateExperience(candidate_id=profile.user_id)
+        experience.company = item.company.strip()
+        experience.title = item.title.strip()
+        experience.location = item.location.strip()
+        experience.start_date = item.start_date
+        experience.end_date = None if item.current else item.end_date
+        experience.current = item.current
+        experience.description = item.description.strip()
+        kept.append(experience)
+    profile.experiences[:] = kept
 
 
 def _replace_skills(db: DbSession, profile: CandidateProfile, skills: list[str]) -> None:
@@ -324,6 +350,7 @@ def save_professional(
         preference.willing_to_relocate = payload.preferences.willing_to_relocate
     preference.updated_at = utcnow()
     profile.updated_at = utcnow()
+    _reconcile_steps(profile)
     db.commit()
     return workspace(db, user)
 
@@ -332,20 +359,22 @@ def save_academic(db: DbSession, user: User, payload: AcademicStepInput) -> Cand
     profile = _profile(db, user.id)
     _step(profile, "academic")
     if "education" in payload.model_fields_set:
-        profile.education.clear()
+        existing = {item.id: item for item in profile.education}
+        kept: list[CandidateEducation] = []
         for item in payload.education:
-            profile.education.append(
-                CandidateEducation(
-                    candidate_id=profile.user_id,
-                    institution=item.institution.strip(),
-                    degree=item.degree.strip(),
-                    field_of_study=item.field_of_study.strip(),
-                    start_year=item.start_year,
-                    end_year=item.end_year,
-                    grade=item.grade.strip(),
-                )
-            )
+            education = existing.get(item.id) if item.id else None
+            if education is None:
+                education = CandidateEducation(candidate_id=profile.user_id)
+            education.institution = item.institution.strip()
+            education.degree = item.degree.strip()
+            education.field_of_study = item.field_of_study.strip()
+            education.start_year = item.start_year
+            education.end_year = item.end_year
+            education.grade = item.grade.strip()
+            kept.append(education)
+        profile.education[:] = kept
     profile.updated_at = utcnow()
+    _reconcile_steps(profile)
     db.commit()
     return workspace(db, user)
 
@@ -366,35 +395,81 @@ def _log(db: DbSession, agency_id: str | None, user_id: str, title: str, detail:
         Activity(
             agency_id=agency_id,
             actor_id=user_id,
-            title=title,
-            detail=detail,
+            title=clip(title, MAX_ACTIVITY_TITLE),
+            detail=clip(detail, MAX_ACTIVITY_DETAIL),
             tone="info",
         )
     )
 
 
-def _validate_step(profile: CandidateProfile, step_key: str) -> None:
-    if step_key == "personal" and not (
-        profile.phone.strip() and profile.location.strip() and profile.headline.strip()
-    ):
-        raise Conflict("Add your phone, location, and headline first.")
+def _step_valid(profile: CandidateProfile, step_key: str) -> bool:
+    if step_key == "personal":
+        return bool(
+            profile.phone.strip() and profile.location.strip() and profile.headline.strip()
+        )
     if step_key == "professional":
         preference = profile.preferences
-        if not (
+        return bool(
             profile.current_title.strip()
             and profile.experience_level.strip()
             and profile.skills
             and preference
             and preference.work_type.strip()
             and preference.preferred_location.strip()
-        ):
-            raise Conflict(
-                "Add your current title, experience level, skills, and work preference first."
-            )
-    if step_key == "academic" and not profile.education:
-        raise Conflict("Add at least one education entry first.")
-    if step_key == "documents" and not profile.documents:
+        )
+    if step_key == "academic":
+        return bool(profile.education) and all(
+            item.institution.strip() and item.degree.strip() for item in profile.education
+        )
+    if step_key == "documents":
+        return bool(profile.documents)
+    return False
+
+
+def _validate_step(profile: CandidateProfile, step_key: str) -> None:
+    if _step_valid(profile, step_key):
+        return
+    if step_key == "personal":
+        raise Conflict("Add your phone, location, and headline first.")
+    if step_key == "professional":
+        raise Conflict(
+            "Add your current title, experience level, skills, and work preference first."
+        )
+    if step_key == "academic":
+        raise Conflict("Add at least one complete education entry first.")
+    if step_key == "documents":
         raise Conflict("Upload at least one document first.")
+
+
+def _reconcile_steps(profile: CandidateProfile) -> None:
+    """Invalidate completed steps whose data is no longer valid and later steps.
+
+    Saving a partial form must not silently keep 100% completion. Data is kept;
+    only the step flags change so the candidate can repair the earliest gap.
+    """
+    blocked = False
+    for step in profile.steps:
+        if blocked:
+            if step.status != "upcoming":
+                step.status = "upcoming"
+                step.completed_at = None
+            continue
+        if step.status == "complete" and _step_valid(profile, step.key):
+            continue
+        step.status = "next"
+        step.completed_at = None
+        blocked = True
+
+
+def onboarding_complete(db: DbSession, user_id: str) -> bool:
+    profile = db.scalar(
+        select(CandidateProfile)
+        .options(selectinload(CandidateProfile.steps))
+        .where(CandidateProfile.user_id == user_id)
+    )
+    if not profile:
+        return False
+    return all(step.status == "complete" for step in profile.steps)
 
 
 def complete_step(db: DbSession, user: User, step_id: str) -> CandidateWorkspaceOut:
@@ -425,10 +500,21 @@ def complete_step(db: DbSession, user: User, step_id: str) -> CandidateWorkspace
 
 def _matches_signature(content_type: str, content: bytes) -> bool:
     if content_type == "application/pdf":
-        return content.startswith(b"%PDF")
+        return (
+            len(content) >= 100
+            and content.startswith(b"%PDF-")
+            and b"%%EOF" in content[-2048:]
+        )
     if content_type.endswith("wordprocessingml.document"):
-        return content.startswith(b"PK\x03\x04")
-    return content.startswith(b"\xd0\xcf\x11\xe0")
+        if not content.startswith(b"PK\x03\x04"):
+            return False
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = archive.namelist()
+        except (zipfile.BadZipFile, OSError, ValueError):
+            return False
+        return "[Content_Types].xml" in names and "word/document.xml" in names
+    return content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
 
 
 def add_document(
@@ -443,28 +529,56 @@ def add_document(
     if not content:
         raise Conflict("The uploaded file is empty.")
     if not _matches_signature(content_type, content):
-        raise Conflict("That file does not look like a PDF or Word document.")
+        raise Conflict("That file does not look like a valid PDF or Word document.")
     if len(content) > get_settings().max_upload_bytes:
-        raise Conflict("The document is larger than 10 MB.")
-    _profile(db, user.id)
-    document_id = str(uuid4())
-    suffix = Path(filename).suffix.lower() or ".pdf"
-    folder = get_settings().document_path / user.id
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{document_id}{suffix}"
-    path.write_bytes(content)
-    db.add(
-        Document(
-            id=document_id,
-            candidate_id=user.id,
-            filename=Path(filename).name,
-            content_type=content_type,
-            size=len(content),
-            storage_path=str(path),
-        )
-    )
-    db.commit()
-    return workspace(db, user)
+        raise Conflict("The document is larger than the configured limit.")
+    with _document_lock(db, user.id):
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        if (
+            not filename
+            or filename in {".", ".."}
+            or len(filename) > 255
+            or any(ord(char) < 32 or ord(char) == 127 for char in filename)
+        ):
+            raise Conflict("Use a filename of 1 to 255 characters without control characters.")
+        profile = _profile(db, user.id)
+        settings = get_settings()
+        if len(profile.documents) >= settings.max_documents_per_candidate:
+            raise Conflict("The document count limit has been reached.")
+        if (
+            sum(document.size for document in profile.documents) + len(content)
+            > settings.max_candidate_document_bytes
+        ):
+            raise Conflict("The total document storage limit has been reached.")
+        document_id = str(uuid4())
+        suffix = {
+            "application/pdf": ".pdf",
+            "application/msword": ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        }[content_type]
+        folder = settings.document_path / user.id
+        path = folder / f"{document_id}{suffix}"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            db.add(
+                Document(
+                    id=document_id,
+                    candidate_id=user.id,
+                    filename=Path(filename).name,
+                    content_type=content_type,
+                    size=len(content),
+                    storage_path=str(path),
+                )
+            )
+            db.commit()
+        except Exception:
+            # Filesystem and database cannot share a transaction; remove the
+            # orphaned file and let the caller report the failure.
+            db.rollback()
+            path.unlink(missing_ok=True)
+            raise
+        return workspace(db, user)
 
 
 def get_document(db: DbSession, user: User, document_id: str) -> Document:
@@ -477,15 +591,40 @@ def get_document(db: DbSession, user: User, document_id: str) -> Document:
 
 
 def delete_document(db: DbSession, user: User, document_id: str) -> CandidateWorkspaceOut:
-    document = get_document(db, user, document_id)
-    if document.candidate_id != user.id:
-        raise Forbidden("Only the candidate can remove this document.")
-    path = Path(document.storage_path)
-    db.delete(document)
-    db.commit()
-    if path.exists():
-        path.unlink()
-    return workspace(db, user)
+    with _document_lock(db, user.id):
+        document = get_document(db, user, document_id)
+        if document.candidate_id != user.id:
+            raise Forbidden("Only the candidate can remove this document.")
+        path = Path(document.storage_path)
+        tombstone = path.with_name(path.name + ".deleting")
+        renamed = False
+        if path.exists():
+            try:
+                path.rename(tombstone)
+                renamed = True
+            except OSError:
+                raise Conflict(
+                    "That document could not be removed right now. Try again."
+                ) from None
+        try:
+            db.delete(document)
+            db.flush()
+            profile = _profile(db, user.id)
+            _reconcile_steps(profile)
+            db.commit()
+        except Exception:
+            db.rollback()
+            if renamed and tombstone.exists():
+                tombstone.rename(path)
+            raise
+        if renamed and tombstone.exists():
+            try:
+                tombstone.unlink()
+            except OSError:
+                # The metadata is gone; the hidden tombstone is harmless and can
+                # be cleaned up later without exposing the file for download.
+                logger.warning("Could not remove document tombstone %s", tombstone)
+        return workspace(db, user)
 
 
 def candidate_agency_candidates(db: DbSession, agency_id: str) -> list[User]:

@@ -20,8 +20,11 @@ def test_referred_application_respects_agency(sign_in):
         assert referred.get("/api/jobs/workspace").json()["applications"] == []
 
 
-def test_independent_application_preserves_workspace_scope(sign_in):
+def test_independent_application_preserves_workspace_scope(
+    sign_in, complete_onboarding
+):
     candidate, csrf, _ = sign_in("Aya Khan")
+    complete_onboarding(candidate, csrf)
     before = candidate.get("/api/jobs/workspace").json()["jobs"]
     job = next(j for j in before if j["title"] == "Frontend Engineer")
     response = candidate.post(f"/api/jobs/{job['id']}/apply", headers={"X-CSRF-Token": csrf})

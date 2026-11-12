@@ -1,6 +1,4 @@
 import asyncio
-import hashlib
-import json
 import math
 import threading
 import time
@@ -130,19 +128,6 @@ class RequestGuards:
                 return await self.reject(scope, receive, send, 408, "Request body timed out.")
             if body is None:
                 return
-            if path == prefix + "/auth/login":
-                try:
-                    data = json.loads(body)
-                    email = data.get("email") if isinstance(data, dict) else None
-                except ValueError, UnicodeError:
-                    email = None
-                if isinstance(email, str) and len(email) <= 320:
-                    key = hashlib.sha256(email.strip().casefold().encode()).hexdigest()
-                    retry = self.allowed(("account", key), settings.auth_requests_per_minute)
-                    if retry:
-                        return await self.reject(
-                            scope, receive, send, 429, "Too many requests. Try again later.", retry
-                        )
             delivered = False
 
             async def replay():

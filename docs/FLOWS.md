@@ -121,6 +121,7 @@ sequenceDiagram
   actor S as Supervisor / Employee
 
   C->>API: POST /api/jobs/{jobId}/apply
+  API->>DB: Check onboarding complete, job open, no duplicate
   API->>DB: Insert application (submitted)
   API-->>C: Updated jobs workspace
 

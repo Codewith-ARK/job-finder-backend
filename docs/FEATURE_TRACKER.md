@@ -27,11 +27,12 @@ not begin the next feature until the active feature meets its definition of done
 | --- | --- | --- | --- | --- |
 | F01 | Candidate identity independence, referral links, and resumable onboarding | **Done** (12 Nov 2026) | `PLAN.md` § F01 | `CONTEXT.md` |
 | F02 | Agency conversations and candidate job queue | Backlog (phase 2) | `PLAN.md` § F02 | — |
-| F03 | Deployment hardening: secure cookies, demo/seed shutdown, PostgreSQL verification | Backlog | — | — |
+| F03 | Security and deployment hardening | **Active** — implementation verified on SQLite; PostgreSQL verification blocked | `PLAN.md` § F03 | `CONTEXT.md` |
+| F04 | Workspace pagination and deterministic cursors | Backlog | — | — |
 
 ## F01 — Candidate identity independence, referral links, and resumable onboarding
 
-**Status:** Done — 12 November 2026. No other feature is active; F02 is the next candidate and stays backlog until the owner assigns it.
+**Status:** Done — 12 November 2026. F03 is the active feature; F02 and F04 stay backlog until the owner assigns them.
 
 **Goal:** a candidate can join independently, or through a single-use agency referral link, and
 then completes one resumable signup + onboarding flow. Candidate data is candidate-owned;
@@ -105,9 +106,72 @@ agency access is an explicit relationship created by referral or assignment.
 | F01.4 | Done | Referral management UI, candidate gate, jobs/applications integration |
 | F01.5 | Done | Full verification, mock/obsolete cleanup, documentation update |
 
+## F03 — Security and deployment hardening
+
+**Status:** Active — implementation and SQLite verification complete on 13 November 2026.
+PostgreSQL/container verification is blocked until a Docker-capable environment is available.
+
+**Goal:** close the audit findings in `BUGS.md` that are verifiable here and make the documented
+single-replica Compose deployment fail closed: no default credentials, demo access, database
+exposure, unbounded auth attempts, or unsafe document handling.
+
+### Scope
+
+- Authentication abuse controls: per-IP limits, failed-credential lockout, `Retry-After`, session
+  purge.
+- Authorization corrections: suspended agencies, inactive referrers, onboarding gate on apply,
+  multi-agency global-role changes, last-supervisor protection.
+- Input and resource bounds: blank-field validation, tag length, workspace row caps, activity text,
+  document structure, filename, count and byte quotas, failure compensation.
+- Deployment: production configuration refusal, trusted hosts, HSTS and browser headers,
+  readiness, non-root image, loopback-only ports, required production overlay.
+
+### Out of scope
+
+- Real pagination/response-contract redesign (F04).
+- Replacing the in-process limiter with a shared store or gateway; the documented topology stays
+  one replica and records the edge requirement.
+- Malware scanning, email delivery, and background workers.
+- Rewriting the applied `c4a9f1b2d7e8` migration.
+
+### Acceptance criteria
+
+- [x] Auth and registration are rate limited; repeated credential failures lock the account and
+      return `429` with `Retry-After`; successful sign-ins reset the counter.
+- [x] Suspended agencies and inactive referrers fail closed for login and referral signup.
+- [x] Applying requires complete onboarding; invalidated onboarding data cannot report 100%.
+- [x] Tenant supervisors cannot change global roles of multi-agency members; the last supervisor
+      cannot be demoted or deactivated.
+- [x] Document uploads are structurally validated, quota-bounded, and compensated on failure;
+      filenames cannot break storage.
+- [x] Workspaces are row-capped and activity text is bounded.
+- [x] Production startup refuses unsafe settings; the container runs non-root with a readiness
+      healthcheck and no public database port.
+- [x] Additive migration adds the workspace and session indexes; upgrade/downgrade passes on
+      disposable SQLite.
+- [x] `uv run ruff check .` clean and `uv run pytest -q` → 74 passed.
+- [ ] PostgreSQL/Docker migration, populated-database findings BUG-003/004/005, and proxy settings
+      verified in a deployment-like environment.
+
+### Verification evidence
+
+- Backend: `uv run ruff check .` clean; `uv run pytest -q` — 74 passed.
+- Migration: `a7d2e5c91f04` upgrade and downgrade asserted in `tests/test_migrations.py`.
+- Not run: `docker compose` and PostgreSQL; this workstation has no Docker.
+
+### Task sequence
+
+| Task | Status | Outcome |
+| --- | --- | --- |
+| F03.1 | Done | Configuration, throttling, headers, readiness, error mapping |
+| F03.2 | Done | Authorization, onboarding, document, and input hardening |
+| F03.3 | Done | Container/Compose hardening and additive indexes |
+| F03.4 | Done | Regression tests and SQLite verification |
+| F03.5 | Blocked | PostgreSQL/Compose and edge-proxy verification |
+
 ## F02 — Agency conversations and candidate job queue (backlog)
 
-**Status:** Backlog — do not start until F01 is accepted.
+**Status:** Backlog — do not start until F03 is accepted and the owner assigns it.
 
 - One-to-one conversations between an assigned agent and candidate.
 - Staff conversation list, unread/read state, close/archive, simple polling.
@@ -115,3 +179,12 @@ agency access is an explicit relationship created by referral or assignment.
 - No attachments or realtime sockets in the first slice.
 
 Add the detailed contract here when F02 becomes active.
+
+## F04 — Workspace pagination and deterministic cursors (backlog)
+
+**Status:** Backlog — follow-up to the hard row caps added in F03.
+
+- Workspace endpoints currently return at most `MAX_WORKSPACE_ITEMS` rows in a fixed order.
+- Add a cursor/limit contract without changing existing response fields by default.
+- Cover candidate jobs/applications, staff candidates/team/activity, platform audit, and referral
+  lists; define empty-page and out-of-range behaviour before implementation.

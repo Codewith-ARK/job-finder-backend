@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import selectinload
 
+from ..config import get_settings
 from ..models import Activity, Agency, Application, Job, User
 from ..models.common import utcnow
 from ..schemas.jobs_schema import (
@@ -12,7 +13,9 @@ from ..schemas.jobs_schema import (
     JobPatch,
     JobsWorkspaceOut,
 )
+from . import candidates_service
 from .errors import Conflict, NotFound
+from .text import MAX_ACTIVITY_DETAIL, MAX_ACTIVITY_TITLE, clip
 
 NEXT_STEPS = {
     "submitted": "The team will review your application",
@@ -58,6 +61,7 @@ def _application_out(application: Application) -> ApplicationOut:
 
 
 def workspace(db: DbSession, agency_id: str | None, user: User) -> JobsWorkspaceOut:
+    limit = get_settings().max_workspace_items
     if user.role == "candidate" and agency_id is None:
         # Independent candidates browse every open role from active agencies.
         job_query = (
@@ -74,7 +78,7 @@ def workspace(db: DbSession, agency_id: str | None, user: User) -> JobsWorkspace
         )
         if user.role == "candidate":
             job_query = job_query.where(Job.status == "open")
-    jobs = list(db.scalars(job_query.order_by(Job.created_at.desc())))
+    jobs = list(db.scalars(job_query.order_by(Job.created_at.desc()).limit(limit)))
     application_query = (
         select(Application)
         .options(
@@ -86,7 +90,9 @@ def workspace(db: DbSession, agency_id: str | None, user: User) -> JobsWorkspace
         application_query = application_query.where(Application.candidate_id == user.id)
     else:
         application_query = application_query.where(Application.agency_id == agency_id)
-    applications = list(db.scalars(application_query.order_by(Application.updated_at.desc())))
+    applications = list(
+        db.scalars(application_query.order_by(Application.updated_at.desc()).limit(limit))
+    )
     return JobsWorkspaceOut(
         jobs=[_job_out(job) for job in jobs],
         applications=[_application_out(item) for item in applications],
@@ -105,8 +111,8 @@ def _log(
         Activity(
             agency_id=agency_id,
             actor_id=actor_id,
-            title=title,
-            detail=detail,
+            title=clip(title, MAX_ACTIVITY_TITLE),
+            detail=clip(detail, MAX_ACTIVITY_DETAIL),
             tone=tone,
         )
     )
@@ -165,6 +171,8 @@ def apply_to_job(
         raise Conflict("That role is no longer accepting applications.")
     if not job.agency or job.agency.status != "active":
         raise Conflict("That agency is not currently accepting applications.")
+    if not candidates_service.onboarding_complete(db, candidate.id):
+        raise Conflict("Complete your onboarding before applying to roles.")
     existing = db.scalar(
         select(Application).where(
             Application.job_id == job.id,

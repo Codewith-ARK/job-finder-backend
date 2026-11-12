@@ -118,6 +118,8 @@ In explicit mock mode: component → hook → feature API → development mock a
 
 Target one public origin: `/` serves Next.js and `/api/...` proxies to FastAPI. T00 records the existing mapping; foundation work establishes it if missing. Forward cookies correctly and document any prefix stripping. Avoid per-endpoint Next.js API wrappers.
 
+**Deployment boundary (recorded 13 November 2026).** One API replica behind the Next.js `/api` rewrite, with an edge/CDN in front for TLS, WAF, and per-IP limits. FastAPI listens on loopback only; PostgreSQL has no published port. Uvicorn accepts forwarded client addresses only from `FORWARDED_ALLOW_IPS`, and `TRUSTED_HOSTS` restricts the `Host` header when configured. Application-level per-IP counters and failed-login lockout remain in force but are process-local: a second replica requires the same per-IP limits at the edge or a shared store. Do not add Nginx, Redis, or Kubernetes without a scoped requirement.
+
 FastAPI validates sessions and authorizes agency, role, and record access. Host-only session cookies use `Path=/`, `HttpOnly`, a deliberate `SameSite` setting, and `Secure` under HTTPS. CSRF protection covers state-changing requests; cookie flags alone do not satisfy this rule. See [OWASP CSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 
 **Candidate identity and agency access.** A candidate is a user with a `candidate_profiles` row whose
@@ -142,4 +144,4 @@ Explicit development-only mock adapters sit at each feature's API boundary and s
 
 After UI review, implement real authentication, then migrate one scoped feature at a time. Keep its mock behavior until the real API and integration pass checks; then remove obsolete runtime mock data and references. Test fixtures may remain isolated under tests. Mixed modes must not send mock-only record IDs into real APIs.
 
-Compose runs API and PostgreSQL separately. Persist database data; introduce a private upload volume with uploads. Add workers, shared object storage, or other services when a scoped feature requires them.
+Compose runs API and PostgreSQL separately. Persist database data; introduce a private upload volume with uploads. The API image runs migrations then uvicorn as an unprivileged user and healthchecks `/api/ready`. Add workers, shared object storage, or other services when a scoped feature requires them.

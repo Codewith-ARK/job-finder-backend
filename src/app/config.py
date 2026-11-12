@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     database_url: str = "sqlite:///./data/jobfinder.db"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Comma-separated host names accepted by TrustedHostMiddleware. Empty keeps
+    # the framework default (no host filtering) for local development.
+    trusted_hosts: str = ""
+    hsts_seconds: int = Field(default=0, ge=0, le=63072000)
     # Local-only convenience: allow the API's own origin and inject the CSRF
     # cookie into Swagger UI requests so /docs can exercise state changes.
     docs_testing_enabled: bool = False
@@ -37,14 +41,22 @@ class Settings(BaseSettings):
     requests_per_minute: int = Field(default=120, ge=1, le=10000)
     auth_requests_per_minute: int = Field(default=20, ge=1, le=1000)
     register_requests_per_minute: int = Field(default=5, ge=1, le=100)
+    login_max_failures: int = Field(default=8, ge=1, le=100)
+    login_lockout_seconds: int = Field(default=900, ge=30, le=86400)
     max_body_readers: int = Field(default=8, ge=1, le=64)
     body_timeout_seconds: int = Field(default=15, ge=1, le=60)
     max_documents_per_candidate: int = Field(default=10, ge=1, le=100)
     max_candidate_document_bytes: int = Field(default=50 * 1024 * 1024, ge=1, le=1024**3)
+    session_retention_days: int = Field(default=7, ge=0, le=365)
+    max_workspace_items: int = Field(default=500, ge=1, le=5000)
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def trusted_host_list(self) -> list[str]:
+        return [host.strip() for host in self.trusted_hosts.split(",") if host.strip()]
 
     @property
     def document_path(self) -> Path:
@@ -156,6 +168,23 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
                 "consider a shorter session lifetime.",
             )
         )
+    if settings.session_days < 1:
+        problems.append(("error", "SESSION_DAYS must be at least 1."))
+    if settings.app_environment == "production" and not settings.trusted_host_list:
+        problems.append(
+            (
+                "warning",
+                "TRUSTED_HOSTS is empty: Host header filtering is disabled. "
+                "Set explicit host names in shared environments.",
+            )
+        )
+    if settings.app_environment == "production" and settings.hsts_seconds == 0:
+        problems.append(
+            (
+                "warning",
+                "HSTS_SECONDS=0: enable HSTS only after the public HTTPS origin is verified.",
+            )
+        )
     if settings.session_cookie == settings.csrf_cookie:
         problems.append(("error", "Session and CSRF cookies must have distinct names."))
     if settings.app_environment == "production":
@@ -171,6 +200,10 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
             (
                 settings.session_days > 30 or settings.session_days < 1,
                 "Production sessions must expire within 1 to 30 days.",
+            ),
+            (
+                "jobfinder:jobfinder" in settings.database_url.lower(),
+                "Production must not use the development database credentials.",
             ),
         ):
             if unsafe:

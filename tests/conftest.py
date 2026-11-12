@@ -16,17 +16,83 @@ from fastapi.testclient import TestClient
 
 from app.database import Base, engine
 from app.main import app
-from app.seed import seed
+from app.seed import MINIMAL_PDF, seed
+from app.throttle import login_throttle
 
 
 @pytest.fixture(autouse=True)
 def fresh_database():
     if hasattr(app.state, "request_guard"):
         app.state.request_guard.reset()
+    login_throttle.reset()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     seed()
     yield
+
+
+@pytest.fixture
+def valid_pdf() -> bytes:
+    return MINIMAL_PDF
+
+
+@pytest.fixture
+def complete_onboarding():
+    def _complete(client: TestClient, csrf: str) -> None:
+        headers = {"X-CSRF-Token": csrf}
+        steps = [
+            (
+                "personal",
+                {
+                    "phone": "+1 555 0100",
+                    "location": "Remote",
+                    "headline": "Product designer",
+                    "summary": "Designer with product experience.",
+                },
+            ),
+            (
+                "professional",
+                {
+                    "currentTitle": "Product designer",
+                    "experienceLevel": "Mid",
+                    "skills": ["Figma"],
+                    "preferences": {"workType": "Remote", "preferredLocation": "Remote"},
+                },
+            ),
+            (
+                "academic",
+                {
+                    "education": [
+                        {
+                            "institution": "Test University",
+                            "degree": "BSc",
+                            "startYear": 2018,
+                        }
+                    ]
+                },
+            ),
+        ]
+        for step, payload in steps:
+            saved = client.put(
+                f"/api/candidates/me/onboarding/{step}", json=payload, headers=headers
+            )
+            assert saved.status_code == 200, saved.text
+            completed = client.post(
+                f"/api/candidates/me/onboarding/{step}/complete", headers=headers
+            )
+            assert completed.status_code == 200, completed.text
+        uploaded = client.post(
+            "/api/candidates/me/documents",
+            files={"file": ("cv.pdf", MINIMAL_PDF, "application/pdf")},
+            headers=headers,
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        finished = client.post("/api/candidates/me/onboarding/documents/complete", headers=headers)
+        assert finished.status_code == 200, finished.text
+        assert finished.json()["onboardingComplete"] is True
+        return finished.json()
+
+    return _complete
 
 
 @pytest.fixture

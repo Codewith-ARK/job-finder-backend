@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
@@ -14,9 +14,10 @@ from ..models import (
 )
 from ..models.common import utcnow
 from ..schemas.auth_schema import AgencyOut, DemoPersonaOut, SessionOut, SessionUserOut
+from ..throttle import login_throttle
 from . import candidates_service, referrals_service
 from .credentials import hash_password, hash_secret, new_secret, verify_password
-from .errors import Conflict, Forbidden, NotFound, Unauthorized
+from .errors import Conflict, Forbidden, NotFound, RateLimited, Unauthorized
 
 ROLE_LABELS = {
     "candidate": "Candidate",
@@ -160,21 +161,44 @@ def _resolve_login_agency(
         )
         if not membership:
             raise Forbidden("That agency is not part of this account.")
+        if not membership.agency or membership.agency.status != "active":
+            raise Forbidden("That agency is not active.")
         return membership.agency
-    return memberships[0].agency
+    eligible = [
+        membership
+        for membership in memberships
+        if membership.agency is not None and membership.agency.status == "active"
+    ]
+    if not eligible:
+        raise Forbidden("This account has no active agency membership.")
+    return eligible[0].agency
+
+
+def _reject_login(email: str) -> None:
+    login_throttle.fail(
+        login_throttle.key(email),
+        get_settings().login_max_failures,
+        get_settings().login_lockout_seconds,
+    )
 
 
 def login(
     db: DbSession, email: str, password: str, agency_id: str | None = None
 ) -> tuple[AuthContext, str, str]:
-    user = db.scalar(select(User).where(User.email == normalize_email(email)))
+    normalized = normalize_email(email)
+    key = login_throttle.key(normalized)
+    retry = login_throttle.retry_after(key)
+    if retry:
+        raise RateLimited("Too many failed sign-in attempts. Try again later.", retry)
+
+    user = db.scalar(select(User).where(User.email == normalized))
     valid_password = verify_password(
         password, user.password_hash if user else DUMMY_PASSWORD_HASH
     )
-    if not user or not valid_password:
+    if not user or not valid_password or not user.is_active:
+        _reject_login(normalized)
         raise Unauthorized("Email or password is incorrect.")
-    if not user.is_active:
-        raise Unauthorized("This account is not active.")
+    login_throttle.success(key)
     agency = _resolve_login_agency(db, user, agency_id)
     record, token, csrf = create_session(db, user, agency.id if agency else None)
     db.commit()
@@ -293,3 +317,17 @@ def change_password(
     ):
         record.revoked_at = utcnow()
     db.commit()
+
+
+def purge_sessions(db: DbSession, retention_days: int) -> int:
+    """Delete expired/revoked session rows older than the retention window."""
+    if retention_days < 0:
+        return 0
+    cutoff = utcnow() - timedelta(days=retention_days)
+    result = db.execute(
+        delete(AuthSession).where(
+            or_(AuthSession.expires_at < cutoff, AuthSession.revoked_at < cutoff)
+        )
+    )
+    db.commit()
+    return int(result.rowcount or 0)

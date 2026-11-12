@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import selectinload
 
+from ..config import get_settings
 from ..models import (
     Activity,
     Agency,
@@ -31,6 +32,7 @@ from ..schemas.staff_schema import (
 from . import candidates_service
 from .credentials import hash_password
 from .errors import Conflict, Forbidden, NotFound
+from .text import MAX_ACTIVITY_DETAIL, MAX_ACTIVITY_TITLE, clip
 
 STEP_WEIGHTS = candidates_service.STEP_WEIGHTS
 
@@ -60,6 +62,7 @@ def _candidate_profiles(db: DbSession, agency_id: str) -> list[CandidateProfile]
                 User.role == "candidate",
             )
             .order_by(CandidateProfile.updated_at.desc())
+            .limit(get_settings().max_workspace_items)
         )
     )
 
@@ -72,7 +75,11 @@ def _completion(profile: CandidateProfile) -> int:
 
 
 def _assignments(db: DbSession, agency_id: str) -> dict[str, CandidateAssignment]:
-    rows = db.scalars(select(CandidateAssignment).where(CandidateAssignment.agency_id == agency_id))
+    rows = db.scalars(
+        select(CandidateAssignment)
+        .where(CandidateAssignment.agency_id == agency_id)
+        .limit(get_settings().max_workspace_items)
+    )
     return {row.candidate_id: row for row in rows}
 
 
@@ -87,6 +94,7 @@ def _staff_memberships(db: DbSession, agency_id: str) -> list[Membership]:
                 User.role.in_(("employee", "supervisor")),
             )
             .order_by(Membership.created_at)
+            .limit(get_settings().max_workspace_items)
         )
     )
 
@@ -98,7 +106,12 @@ def workspace(db: DbSession, agency_id: str) -> StaffWorkspaceOut:
     memberships = _staff_memberships(db, agency_id)
     teams = [
         team.name
-        for team in db.scalars(select(Team).where(Team.agency_id == agency_id).order_by(Team.name))
+        for team in db.scalars(
+            select(Team)
+            .where(Team.agency_id == agency_id)
+            .order_by(Team.name)
+            .limit(get_settings().max_workspace_items)
+        )
     ]
     activity = list(
         db.scalars(
@@ -176,8 +189,8 @@ def _log(
         Activity(
             agency_id=agency_id,
             actor_id=actor_id,
-            title=title,
-            detail=detail,
+            title=clip(title, MAX_ACTIVITY_TITLE),
+            detail=clip(detail, MAX_ACTIVITY_DETAIL),
             tone=tone,
         )
     )
@@ -357,6 +370,43 @@ def update_member(
         raise Forbidden("You cannot deactivate your own account.")
     if member.role not in ("employee", "supervisor"):
         raise Forbidden("Only agency staff can be managed here.")
+
+    changing_role = payload.role is not None and payload.role != member.role
+    demoting_supervisor = (
+        changing_role and member.role == "supervisor" and payload.role != "supervisor"
+    )
+    deactivating = payload.active is False and membership.active
+
+    if changing_role:
+        # Roles are global, so a tenant supervisor must not change authority that
+        # also applies in another agency. Platform administration owns that change.
+        other_membership = db.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.user_id == member.id,
+                Membership.agency_id != agency_id,
+                Membership.active.is_(True),
+            )
+        )
+        if other_membership:
+            raise Forbidden(
+                "Role changes for members of multiple agencies require platform administration."
+            )
+
+    if (demoting_supervisor or (deactivating and member.role == "supervisor")):
+        remaining_supervisors = db.scalar(
+            select(func.count(Membership.id))
+            .join(User, User.id == Membership.user_id)
+            .where(
+                Membership.agency_id == agency_id,
+                Membership.user_id != member.id,
+                Membership.active.is_(True),
+                User.is_active.is_(True),
+                User.role == "supervisor",
+            )
+        )
+        if not remaining_supervisors:
+            raise Conflict("An agency must keep at least one active supervisor.")
+
     if payload.role is not None:
         member.role = payload.role
     if payload.team is not None:

@@ -3,6 +3,7 @@ from datetime import timedelta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session as DbSession
 
+from ..config import get_settings
 from ..models import Agency, Membership, ReferralLink, User
 from ..models.common import utcnow
 from ..schemas.referrals_schema import (
@@ -32,7 +33,31 @@ def _status_reason(status: str) -> str:
         "used": "This referral link has already been used.",
         "expired": "This referral link has expired.",
         "revoked": "This referral link was revoked.",
+        "inactive": "This referral link is no longer accepting signups.",
     }.get(status, "")
+
+
+def _referrer_active(db: DbSession, link: ReferralLink) -> bool:
+    """The link is only usable while its creator still works in that agency."""
+    creator = db.get(User, link.created_by)
+    if not creator or not creator.is_active or creator.role not in STAFF_ROLES:
+        return False
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == creator.id,
+            Membership.agency_id == link.agency_id,
+            Membership.active.is_(True),
+        )
+    )
+    return membership is not None
+
+
+def _eligibility_reason(db: DbSession, link: ReferralLink) -> str | None:
+    if not link.agency or link.agency.status != "active":
+        return "That agency is not currently accepting referrals."
+    if not _referrer_active(db, link):
+        return "This referral link is no longer accepting signups."
+    return None
 
 
 def _link_out(link: ReferralLink) -> ReferralLinkOut:
@@ -67,6 +92,9 @@ def resolve(db: DbSession, token: str) -> ReferralResolveOut:
             reason="This referral link is not valid.",
         )
     status = _status(link, utcnow())
+    inactive_reason = _eligibility_reason(db, link) if status == "active" else None
+    if inactive_reason:
+        status = "inactive"
     return ReferralResolveOut(
         valid=status == "active",
         status=status,
@@ -74,7 +102,7 @@ def resolve(db: DbSession, token: str) -> ReferralResolveOut:
         referrer_name=link.creator.name if link.creator else "",
         label=link.label,
         expires_at=link.expires_at,
-        reason=_status_reason(status),
+        reason=inactive_reason or _status_reason(status),
     )
 
 
@@ -87,6 +115,9 @@ def consume(db: DbSession, token: str, user_id: str) -> ReferralLink:
     link = _by_token(db, token)
     if not link:
         raise Conflict("This referral link is not valid.")
+    inactive_reason = _eligibility_reason(db, link)
+    if inactive_reason:
+        raise Conflict(inactive_reason)
     now = utcnow()
     result = db.execute(
         update(ReferralLink)
@@ -144,7 +175,11 @@ def list_links(db: DbSession, agency: Agency, actor: User) -> list[ReferralLinkO
     query = select(ReferralLink).where(ReferralLink.agency_id == agency.id)
     if actor.role != "supervisor":
         query = query.where(ReferralLink.created_by == actor.id)
-    links = db.scalars(query.order_by(ReferralLink.created_at.desc()))
+    links = db.scalars(
+        query.order_by(ReferralLink.created_at.desc()).limit(
+            get_settings().max_workspace_items
+        )
+    )
     return [_link_out(link) for link in links]
 
 

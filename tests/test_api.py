@@ -126,7 +126,7 @@ def test_docs_testing_origin_and_csrf_interceptor(client, monkeypatch):
     assert denied.status_code == 403
 
 
-def test_candidate_onboarding_order_and_documents(sign_in):
+def test_candidate_onboarding_order_and_documents(sign_in, valid_pdf):
     client, csrf, _ = sign_in("Aya Khan")
     headers = {"X-CSRF-Token": csrf}
     early = client.post("/api/candidates/me/onboarding/documents/complete", headers=headers)
@@ -218,14 +218,14 @@ def test_candidate_onboarding_order_and_documents(sign_in):
 
     upload = client.post(
         "/api/candidates/me/documents",
-        files={"file": ("cv.pdf", b"%PDF-1.4 test", "application/pdf")},
+        files={"file": ("cv.pdf", valid_pdf, "application/pdf")},
         headers=headers,
     )
     assert upload.status_code == 200, upload.text
     document = upload.json()["documents"][0]
     download = client.get(f"/api/candidates/me/documents/{document['id']}")
     assert download.status_code == 200
-    assert download.content == b"%PDF-1.4 test"
+    assert download.content == valid_pdf
     done = client.post("/api/candidates/me/onboarding/documents/complete", headers=headers)
     assert done.json()["profile"]["completion"] == 100
     assert done.json()["onboardingComplete"] is True
@@ -368,8 +368,9 @@ def test_assignment_and_cross_agency_denial(sign_in):
     assert cross.status_code == 404
 
 
-def test_job_application_shared_workflow(sign_in):
+def test_job_application_shared_workflow(sign_in, complete_onboarding):
     candidate, csrf, _ = sign_in("Aya Khan")
+    complete_onboarding(candidate, csrf)
     jobs = candidate.get("/api/jobs/workspace").json()
     frontend = next(job for job in jobs["jobs"] if job["title"] == "Frontend Engineer")
     applied = candidate.post(f"/api/jobs/{frontend['id']}/apply", headers={"X-CSRF-Token": csrf})

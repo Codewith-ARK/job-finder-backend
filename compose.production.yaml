@@ -1,0 +1,25 @@
+# Production overlay. Everything here is required, so a misconfigured deploy
+# fails fast instead of starting with development defaults.
+#
+#   POSTGRES_PASSWORD=... CORS_ORIGINS=https://app.example.com \
+#   TRUSTED_HOSTS=app.example.com HSTS_SECONDS=31536000 \
+#   FORWARDED_ALLOW_IPS=172.18.0.1 \
+#   docker compose -f compose.yaml -f compose.production.yaml up -d
+#
+# Topology: edge/CDN (TLS, WAF, per-IP limits) -> Next.js (existing /api rewrite)
+# -> this API on 127.0.0.1:8000. Keep port 8000 loopback-only; never publish it
+# publicly. FORWARDED_ALLOW_IPS must name only the proxy hop that reaches the API.
+
+services:
+  api:
+    environment:
+      APP_ENVIRONMENT: production
+      COOKIE_SECURE: "true"
+      DEMO_LOGIN_ENABLED: "false"
+      SEED_ON_STARTUP: "false"
+      DOCS_TESTING_ENABLED: "false"
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set the public HTTPS origin, for example https://app.example.com}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set the public host names that reach the API}
+      HSTS_SECONDS: ${HSTS_SECONDS:?Set the HSTS max-age in seconds, for example 31536000}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?Trust only the proxy address that reaches the API}
+      SESSION_DAYS: ${SESSION_DAYS:-7}

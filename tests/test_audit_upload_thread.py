@@ -8,7 +8,7 @@ from app.main import app
 from app.services import candidates_service
 
 
-def test_upload_service_does_not_block_event_loop(sign_in, monkeypatch):
+def test_upload_service_does_not_block_event_loop(sign_in, monkeypatch, valid_pdf):
     client, csrf, _ = sign_in("Aya Khan")
     threads = {}
     original_read = UploadFile.read
@@ -33,7 +33,7 @@ def test_upload_service_does_not_block_event_loop(sign_in, monkeypatch):
         ) as connection:
             response = await connection.post(
                 "/api/candidates/me/documents",
-                files={"file": ("cv.pdf", b"%PDF-test", "application/pdf")},
+                files={"file": ("cv.pdf", valid_pdf, "application/pdf")},
                 headers={"X-CSRF-Token": csrf},
             )
             assert response.status_code == 200

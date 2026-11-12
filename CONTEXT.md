@@ -1,6 +1,6 @@
 # Backend context
 
-**Current priority:** F01 delivered and verified; the next feature is assigned from `docs/FEATURE_TRACKER.md`. **Architecture:** approved simple MVC. Authentication, role/agency authorization, persistence, migrations, seed data, candidate independence, referrals, and resumable onboarding are implemented and tested. Docker/PostgreSQL deployment is authored but unexecuted locally.
+**Current priority:** F03 security and deployment hardening is implemented and verified on SQLite; PostgreSQL container verification is the remaining blocker. The next feature is assigned from `docs/FEATURE_TRACKER.md`. **Architecture:** approved simple MVC. Authentication, role/agency authorization, persistence, migrations, seed data, candidate independence, referrals, resumable onboarding, abuse controls, and hardened container configuration are implemented and tested. Docker/PostgreSQL deployment is authored but unexecuted locally.
 
 ## Responsibility
 
@@ -68,3 +68,28 @@ After T00, record actual runtime/tooling, implemented endpoints, database/migrat
   against a fresh migrated database → 34/34 checks (individual and referral signup, resume,
   completion, upload, apply, CSRF, wrong role, cross-agency denial, staff visibility, revoke).
 - **Blocked:** Docker/PostgreSQL remains unexecuted on this workstation.
+
+## F03 implementation evidence (13 November 2026)
+
+- **Status:** Implementation and SQLite verification complete; PostgreSQL/container verification
+  is the remaining blocked criterion. Findings and per-item notes are in `BUGS.md`.
+- **Security fixes:** failed-login lockout and per-IP auth/registration limits (`throttle.py`,
+  `request_guards.py`); production configuration refusal; suspended-agency login and referral
+  rejection; inactive-referrer rejection; onboarding gate on apply; step invalidation on save or
+  document deletion; multi-agency role-change denial; last-supervisor guard; document structural
+  validation, quota enforcement, and filesystem/database compensation; bounded activity text and
+  workspace reads; blank-input rejection; stable experience/education IDs; `IntegrityError` → 409;
+  startup session purge; `/api/ready`; HSTS, CSP, Permissions-Policy, CORP, and trusted-host
+  handling.
+- **Migration:** additive `a7d2e5c91f04` adds workspace/session indexes (jobs, applications,
+  activities, auth_sessions, memberships, candidate_assignments, referral_links). Upgrade and
+  downgrade pass in the disposable SQLite migration test.
+- **Deployment:** the image runs as an unprivileged user with a `/api/ready` healthcheck; uvicorn
+  trusts only `FORWARDED_ALLOW_IPS`. PostgreSQL has no published port; the API publishes on
+  loopback. `compose.production.yaml` requires `CORS_ORIGINS`, `TRUSTED_HOSTS`, `HSTS_SECONDS`,
+  and `FORWARDED_ALLOW_IPS`, and forces secure cookies with demo/seed/docs disabled.
+- **Verified:** `uv run ruff check .` clean; `uv run pytest -q` → 74 passed, including the new
+  hardening, upload-integrity, quota, and migration-index checks.
+- **Blocked:** Docker and PostgreSQL are unavailable here. The Compose/PostgreSQL path, the
+  populated-migration findings BUG-003/004/005, and edge proxy behaviour remain unverified and are
+  recorded deployment prerequisites.
