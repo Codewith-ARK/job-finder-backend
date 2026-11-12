@@ -252,12 +252,18 @@ def _step(profile: CandidateProfile, step_key: str):
 def save_personal(db: DbSession, user: User, payload: PersonalStepInput) -> CandidateWorkspaceOut:
     profile = _profile(db, user.id)
     _step(profile, "personal")
-    profile.phone = payload.phone.strip()
-    profile.location = payload.location.strip()
-    profile.headline = payload.headline.strip()
-    profile.summary = payload.summary.strip()
-    profile.linkedin_url = payload.linkedin_url.strip()
-    profile.portfolio_url = payload.portfolio_url.strip()
+    if "phone" in payload.model_fields_set:
+        profile.phone = payload.phone.strip()
+    if "location" in payload.model_fields_set:
+        profile.location = payload.location.strip()
+    if "headline" in payload.model_fields_set:
+        profile.headline = payload.headline.strip()
+    if "summary" in payload.model_fields_set:
+        profile.summary = payload.summary.strip()
+    if "linkedin_url" in payload.model_fields_set:
+        profile.linkedin_url = payload.linkedin_url.strip()
+    if "portfolio_url" in payload.model_fields_set:
+        profile.portfolio_url = payload.portfolio_url.strip()
     profile.updated_at = utcnow()
     db.commit()
     return workspace(db, user)
@@ -294,19 +300,28 @@ def save_professional(
 ) -> CandidateWorkspaceOut:
     profile = _profile(db, user.id)
     _step(profile, "professional")
-    profile.current_title = payload.current_title.strip()
-    profile.experience_level = payload.experience_level
-    _replace_skills(db, profile, payload.skills)
-    _replace_experiences(profile, payload)
+    if "current_title" in payload.model_fields_set:
+        profile.current_title = payload.current_title.strip()
+    if "experience_level" in payload.model_fields_set:
+        profile.experience_level = payload.experience_level
+    if "skills" in payload.model_fields_set:
+        _replace_skills(db, profile, payload.skills)
+    if "experiences" in payload.model_fields_set:
+        _replace_experiences(profile, payload)
     preference = profile.preferences
     if not preference:
         preference = CandidatePreference(user_id=profile.user_id)
         profile.preferences = preference
-    preference.work_type = payload.preferences.work_type
-    preference.preferred_location = payload.preferences.preferred_location.strip()
-    preference.salary_expectation = payload.preferences.salary_expectation.strip()
-    preference.availability = payload.preferences.availability.strip()
-    preference.willing_to_relocate = payload.preferences.willing_to_relocate
+    if "work_type" in payload.preferences.model_fields_set:
+        preference.work_type = payload.preferences.work_type
+    if "preferred_location" in payload.preferences.model_fields_set:
+        preference.preferred_location = payload.preferences.preferred_location.strip()
+    if "salary_expectation" in payload.preferences.model_fields_set:
+        preference.salary_expectation = payload.preferences.salary_expectation.strip()
+    if "availability" in payload.preferences.model_fields_set:
+        preference.availability = payload.preferences.availability.strip()
+    if "willing_to_relocate" in payload.preferences.model_fields_set:
+        preference.willing_to_relocate = payload.preferences.willing_to_relocate
     preference.updated_at = utcnow()
     profile.updated_at = utcnow()
     db.commit()
@@ -316,19 +331,20 @@ def save_professional(
 def save_academic(db: DbSession, user: User, payload: AcademicStepInput) -> CandidateWorkspaceOut:
     profile = _profile(db, user.id)
     _step(profile, "academic")
-    profile.education.clear()
-    for item in payload.education:
-        profile.education.append(
-            CandidateEducation(
-                candidate_id=profile.user_id,
-                institution=item.institution.strip(),
-                degree=item.degree.strip(),
-                field_of_study=item.field_of_study.strip(),
-                start_year=item.start_year,
-                end_year=item.end_year,
-                grade=item.grade.strip(),
+    if "education" in payload.model_fields_set:
+        profile.education.clear()
+        for item in payload.education:
+            profile.education.append(
+                CandidateEducation(
+                    candidate_id=profile.user_id,
+                    institution=item.institution.strip(),
+                    degree=item.degree.strip(),
+                    field_of_study=item.field_of_study.strip(),
+                    start_year=item.start_year,
+                    end_year=item.end_year,
+                    grade=item.grade.strip(),
+                )
             )
-        )
     profile.updated_at = utcnow()
     db.commit()
     return workspace(db, user)
