@@ -100,9 +100,21 @@ def role_dependency(*roles: str) -> Callable[..., AuthContext]:
     return dependency
 
 
-def enforce_origin(request: Request) -> None:
+def origin_allowed(request: Request) -> bool:
+    """Accept allowlisted origins, plus the API's own origin for local docs testing."""
     origin = request.headers.get("origin")
-    if origin and origin not in get_settings().cors_origin_list:
+    if not origin:
+        return True
+    settings = get_settings()
+    if origin in settings.cors_origin_list:
+        return True
+    if settings.docs_testing_enabled:
+        return origin == f"{request.url.scheme}://{request.url.netloc}"
+    return False
+
+
+def enforce_origin(request: Request) -> None:
+    if not origin_allowed(request):
         raise Forbidden("This origin is not allowed.")
 
 
@@ -147,6 +159,7 @@ __all__ = [
     "current_staff",
     "enforce_origin",
     "get_auth_context",
+    "origin_allowed",
     "require_agency",
     "require_candidate",
     "require_csrf",

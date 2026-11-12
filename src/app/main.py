@@ -3,10 +3,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.exc import OperationalError
 
-from .config import get_settings
+from .config import Settings, configuration_problems, get_settings
 from .controllers import (
     auth_controller,
     candidates_controller,
@@ -14,6 +14,7 @@ from .controllers import (
     platform_controller,
     staff_controller,
 )
+from .security import origin_allowed
 from .seed import seed
 from .services.errors import ServiceError
 
@@ -31,13 +32,69 @@ async def lifespan(_app: FastAPI):
     yield
 
 
+def _docs_html(settings: Settings) -> str:
+    """Swagger UI that echoes the CSRF cookie, for local API testing only."""
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{settings.app_name} — API docs</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"
+    />
+  </head>
+  <body class="swagger-ui">
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({{
+        url: "/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        displayRequestDuration: true,
+        requestInterceptor: (request) => {{
+          const method = (request.method || "GET").toUpperCase();
+          if (!["GET", "HEAD", "OPTIONS"].includes(method)) {{
+            const match = document.cookie.match(
+              /(?:^|; ){settings.csrf_cookie}=([^;]*)/
+            );
+            if (match) {{
+              request.headers = request.headers || {{}};
+              request.headers["X-CSRF-Token"] = decodeURIComponent(match[1]);
+            }}
+          }}
+          return request;
+        }},
+      }});
+    </script>
+  </body>
+</html>
+"""
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
+    problems = configuration_problems(settings)
+    for level, message in problems:
+        getattr(logger, level)("Configuration: %s", message)
+    if any(level == "error" for level, _message in problems):
+        raise RuntimeError("Unsafe configuration detected; see the log above.")
+    if not problems:
+        logger.info("Configuration audit passed: no unsafe settings detected.")
+    logger.info(
+        "Configuration: %d CORS origin(s); docs testing %s; cookie secure %s.",
+        len(settings.cors_origin_list),
+        "enabled" if settings.docs_testing_enabled else "disabled",
+        "enabled" if settings.cookie_secure else "disabled",
+    )
+
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",
         lifespan=lifespan,
-        docs_url="/docs",
+        docs_url=None if settings.docs_testing_enabled else "/docs",
         redoc_url=None,
     )
     app.add_middleware(
@@ -50,11 +107,15 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def origin_guard(request: Request, call_next):
-        if request.method not in {"GET", "HEAD", "OPTIONS"}:
-            origin = request.headers.get("origin")
-            if origin and origin not in settings.cors_origin_list:
-                return JSONResponse({"detail": "This origin is not allowed."}, status_code=403)
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and not origin_allowed(request):
+            return JSONResponse({"detail": "This origin is not allowed."}, status_code=403)
         return await call_next(request)
+
+    if settings.docs_testing_enabled:
+
+        @app.get("/docs", include_in_schema=False)
+        def api_docs() -> HTMLResponse:
+            return HTMLResponse(_docs_html(settings))
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(_request: Request, error: ServiceError):
