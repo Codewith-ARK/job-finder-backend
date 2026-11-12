@@ -363,8 +363,8 @@ def update_member(
     member = membership.user
     if actor.id == member.id and payload.active is False:
         raise Forbidden("You cannot deactivate your own account.")
-    if member.role == "platform_admin":
-        raise Forbidden("Platform administrators cannot be managed here.")
+    if member.role not in ("employee", "supervisor"):
+        raise Forbidden("Only agency staff can be managed here.")
     if payload.role is not None:
         member.role = payload.role
     if payload.team is not None:
@@ -383,6 +383,7 @@ def update_member(
                 )
             ):
                 record.revoked_at = utcnow()
+            db.flush()
             remaining = db.scalar(
                 select(func.count(Membership.id)).where(
                     Membership.user_id == member.id,
