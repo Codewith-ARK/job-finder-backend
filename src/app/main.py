@@ -110,7 +110,12 @@ def create_app() -> FastAPI:
     async def origin_guard(request: Request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"} and not origin_allowed(request):
             return JSONResponse({"detail": "This origin is not allowed."}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     if settings.docs_testing_enabled:
 
