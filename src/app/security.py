@@ -24,7 +24,13 @@ def get_auth_context(request: Request, db: DbSession = Depends(get_db)) -> AuthC
 def require_csrf(request: Request, context: AuthContext = Depends(get_auth_context)) -> AuthContext:
     header = request.headers.get("x-csrf-token")
     cookie = request.cookies.get(get_settings().csrf_cookie)
-    if not header or not cookie or not secrets.compare_digest(header, cookie):
+    if (
+        not header
+        or not cookie
+        or not header.isascii()
+        or not cookie.isascii()
+        or not secrets.compare_digest(header, cookie)
+    ):
         raise Forbidden("The request could not be verified. Refresh and try again.")
     if not verify_csrf(context.session, header):
         raise Forbidden("The request could not be verified. Refresh and try again.")
