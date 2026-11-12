@@ -17,14 +17,16 @@ def workspace(db: DbSession) -> PlatformWorkspaceOut:
     agencies = list(db.scalars(select(Agency).order_by(Agency.name)))
     integrations = list(db.scalars(select(Integration).order_by(Integration.name)))
     connected = sum(1 for item in integrations if item.status == "connected")
+    counts = dict(
+        db.execute(
+            select(Membership.agency_id, func.count(Membership.id))
+            .where(Membership.active.is_(True))
+            .group_by(Membership.agency_id)
+        ).all()
+    )
     agencies_out = []
     for agency in agencies:
-        users = db.scalar(
-            select(func.count(Membership.id)).where(
-                Membership.agency_id == agency.id,
-                Membership.active.is_(True),
-            )
-        )
+        users = counts.get(agency.id, 0)
         agencies_out.append(
             PlatformAgencyOut(
                 id=agency.id,

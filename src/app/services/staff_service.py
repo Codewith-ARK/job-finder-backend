@@ -1,4 +1,5 @@
 import secrets
+from collections import Counter
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -90,19 +91,10 @@ def _staff_memberships(db: DbSession, agency_id: str) -> list[Membership]:
     )
 
 
-def _workload(db: DbSession, agency_id: str, member_id: str) -> int:
-    count = db.scalar(
-        select(func.count(CandidateAssignment.id)).where(
-            CandidateAssignment.agency_id == agency_id,
-            CandidateAssignment.member_id == member_id,
-        )
-    )
-    return min(100, int(count or 0) * 25)
-
-
 def workspace(db: DbSession, agency_id: str) -> StaffWorkspaceOut:
     profiles = _candidate_profiles(db, agency_id)
     assignments = _assignments(db, agency_id)
+    workloads = Counter(row.member_id for row in assignments.values())
     memberships = _staff_memberships(db, agency_id)
     teams = [
         team.name
@@ -153,7 +145,7 @@ def workspace(db: DbSession, agency_id: str) -> StaffWorkspaceOut:
                 email=membership.user.email,
                 role=membership.user.role,
                 team=membership.team.name if membership.team else "Unassigned",
-                workload=_workload(db, agency_id, membership.user_id),
+                workload=min(100, workloads[membership.user_id] * 25),
                 active=membership.active and membership.user.is_active,
             )
             for membership in memberships
