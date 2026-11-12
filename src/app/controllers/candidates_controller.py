@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session as DbSession
+from starlette.concurrency import run_in_threadpool
 
 from ..config import get_settings
 from ..database import get_db
@@ -69,7 +70,8 @@ async def upload_document(
     db: DbSession = Depends(get_db),
 ) -> CandidateWorkspaceOut:
     content = await file.read(get_settings().max_upload_bytes + 1)
-    return candidates_service.add_document(
+    return await run_in_threadpool(
+        candidates_service.add_document,
         db,
         context.user,
         file.filename or "document",
