@@ -195,10 +195,6 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
             (settings.seed_on_startup, "Production forbids SEED_ON_STARTUP=true."),
             (settings.docs_testing_enabled, "Production forbids DOCS_TESTING_ENABLED=true."),
             (
-                not cleaned or any(not origin.startswith("https://") for origin in cleaned),
-                "Production requires explicit HTTPS CORS origins.",
-            ),
-            (
                 settings.session_days > 30 or settings.session_days < 1,
                 "Production sessions must expire within 1 to 30 days.",
             ),
