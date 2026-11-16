@@ -27,6 +27,7 @@ from .models import (
     User,
 )
 from .models.common import new_id, utcnow
+from .services import storage
 from .services.credentials import hash_password, hash_secret
 
 DEMO_PASSWORD = "Demo1234!"
@@ -59,10 +60,9 @@ def _steps(profile: CandidateProfile, statuses: tuple[str, str, str, str]) -> No
 
 def _seed_document(profile: CandidateProfile) -> None:
     """Attach a real tiny PDF so the documents step is genuinely complete."""
-    folder = get_settings().document_path / profile.user_id
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / "cv.pdf"
-    path.write_bytes(MINIMAL_PDF)
+    blob_pathname = storage.upload(
+        f"documents/{profile.user_id}/seed-cv.pdf", MINIMAL_PDF, "application/pdf"
+    )
     profile.documents.append(
         Document(
             id=new_id(),
@@ -70,7 +70,7 @@ def _seed_document(profile: CandidateProfile) -> None:
             filename="cv.pdf",
             content_type="application/pdf",
             size=len(MINIMAL_PDF),
-            storage_path=str(path),
+            blob_pathname=blob_pathname,
         )
     )
 

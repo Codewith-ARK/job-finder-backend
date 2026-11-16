@@ -163,7 +163,7 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
-    storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    blob_pathname: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     candidate: Mapped[CandidateProfile] = relationship(back_populates="documents")

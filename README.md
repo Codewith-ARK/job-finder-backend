@@ -61,7 +61,6 @@ Demo sign-in is disabled unless `DEMO_LOGIN_ENABLED=true`. The frontend `/demo` 
 | `SESSION_DAYS` / `SESSION_RETENTION_DAYS` | Session lifetime and how long expired/revoked rows are kept |
 | `DEMO_LOGIN_ENABLED` | Enables demo account sign-in and persona discovery |
 | `SEED_ON_STARTUP` | Seeds an empty database at app startup |
-| `DOCUMENT_DIR` | Private document storage outside public paths, default `storage/documents` |
 | `MAX_UPLOAD_BYTES` / `MAX_DOCUMENTS_PER_CANDIDATE` / `MAX_CANDIDATE_DOCUMENT_BYTES` | Per-file size, per-candidate count, and aggregate storage quota |
 | `REQUESTS_PER_MINUTE`, `AUTH_REQUESTS_PER_MINUTE`, `REGISTER_REQUESTS_PER_MINUTE` | Process-local per-IP limits |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCKOUT_SECONDS` | Per-account lockout after failed credentials |

@@ -9,7 +9,6 @@ os.environ["DEMO_LOGIN_ENABLED"] = "true"
 os.environ["SEED_ON_STARTUP"] = "false"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["DOCS_TESTING_ENABLED"] = "true"
-os.environ["DOCUMENT_DIR"] = (_TEMP / "documents").as_posix()
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,11 +16,32 @@ from fastapi.testclient import TestClient
 from app.database import Base, engine
 from app.main import app
 from app.seed import MINIMAL_PDF, seed
+from app.services import storage
 from app.throttle import login_throttle
 
 
+@pytest.fixture
+def fake_blob(monkeypatch):
+    blobs: dict[str, tuple[bytes, str]] = {}
+
+    def upload(pathname: str, data: bytes, content_type: str) -> str:
+        blobs[pathname] = (data, content_type)
+        return pathname
+
+    def download(pathname: str) -> tuple[bytes, str]:
+        return blobs[pathname]
+
+    def remove(pathname: str) -> None:
+        blobs.pop(pathname, None)
+
+    monkeypatch.setattr(storage, "upload", upload)
+    monkeypatch.setattr(storage, "download", download)
+    monkeypatch.setattr(storage, "remove", remove)
+    return blobs
+
+
 @pytest.fixture(autouse=True)
-def fresh_database():
+def fresh_database(fake_blob):
     if hasattr(app.state, "request_guard"):
         app.state.request_guard.reset()
     login_throttle.reset()

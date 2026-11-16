@@ -37,6 +37,7 @@ from ..schemas.candidates_schema import (
     ProfileOut,
     ReferralContextOut,
 )
+from . import storage
 from .errors import Conflict, Forbidden, NotFound
 from .text import MAX_ACTIVITY_DETAIL, MAX_ACTIVITY_TITLE, clip
 
@@ -556,11 +557,11 @@ def add_document(
             "application/msword": ".doc",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
         }[content_type]
-        folder = settings.document_path / user.id
-        path = folder / f"{document_id}{suffix}"
+        blob_pathname = f"documents/{user.id}/{document_id}{suffix}"
+        uploaded = False
         try:
-            folder.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+            blob_pathname = storage.upload(blob_pathname, content, content_type)
+            uploaded = True
             db.add(
                 Document(
                     id=document_id,
@@ -568,15 +569,19 @@ def add_document(
                     filename=Path(filename).name,
                     content_type=content_type,
                     size=len(content),
-                    storage_path=str(path),
+                    blob_pathname=blob_pathname,
                 )
             )
             db.commit()
         except Exception:
-            # Filesystem and database cannot share a transaction; remove the
-            # orphaned file and let the caller report the failure.
+            # Blob storage and the database cannot share a transaction; remove
+            # the orphaned blob and let the caller report the failure.
             db.rollback()
-            path.unlink(missing_ok=True)
+            if uploaded:
+                try:
+                    storage.remove(blob_pathname)
+                except Exception:
+                    logger.exception("Could not remove orphaned document blob %s", blob_pathname)
             raise
         return workspace(db, user)
 
@@ -595,17 +600,7 @@ def delete_document(db: DbSession, user: User, document_id: str) -> CandidateWor
         document = get_document(db, user, document_id)
         if document.candidate_id != user.id:
             raise Forbidden("Only the candidate can remove this document.")
-        path = Path(document.storage_path)
-        tombstone = path.with_name(path.name + ".deleting")
-        renamed = False
-        if path.exists():
-            try:
-                path.rename(tombstone)
-                renamed = True
-            except OSError:
-                raise Conflict(
-                    "That document could not be removed right now. Try again."
-                ) from None
+        storage.remove(document.blob_pathname)
         try:
             db.delete(document)
             db.flush()
@@ -614,16 +609,7 @@ def delete_document(db: DbSession, user: User, document_id: str) -> CandidateWor
             db.commit()
         except Exception:
             db.rollback()
-            if renamed and tombstone.exists():
-                tombstone.rename(path)
             raise
-        if renamed and tombstone.exists():
-            try:
-                tombstone.unlink()
-            except OSError:
-                # The metadata is gone; the hidden tombstone is harmless and can
-                # be cleaned up later without exposing the file for download.
-                logger.warning("Could not remove document tombstone %s", tombstone)
         return workspace(db, user)
 
 

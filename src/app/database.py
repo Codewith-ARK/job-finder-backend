@@ -20,7 +20,8 @@ def _ensure_sqlite_directory(url: str) -> None:
 
 def _build_engine():
     settings = get_settings()
-    _ensure_sqlite_directory(settings.database_url)
+    if settings.app_environment != "production":
+        _ensure_sqlite_directory(settings.database_url)
     connect_args = (
         {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
     )

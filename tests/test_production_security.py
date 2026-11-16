@@ -31,6 +31,7 @@ def test_production_disables_documentation(monkeypatch):
         "seed_on_startup": False,
         "docs_testing_enabled": False,
         "cors_origins": "https://example.com",
+        "database_url": "postgresql://jobfinder:test@localhost/jobfinder",
     }.items():
         monkeypatch.setattr(settings, key, value, raising=False)
     production = create_app()
