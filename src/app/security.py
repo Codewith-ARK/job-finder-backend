@@ -5,12 +5,19 @@ from fastapi import Depends, Request, Response
 from sqlalchemy.orm import Session as DbSession
 
 from .config import get_settings
-from .database import get_db
+from .database import SessionLocal, get_db
 from .models import Agency, AuthSession, User
 from .services.auth_service import AuthContext, resolve_session, verify_csrf
 from .services.errors import Forbidden, Unauthorized
 
 STAFF_ROLES = ("employee", "supervisor")
+
+
+def validate_upload_request(request: Request) -> None:
+    """Reject uploads before multipart parsing; normal route checks still run."""
+    with SessionLocal() as db:
+        context = get_auth_context(request, db)
+        require_candidate(require_csrf(request, context))
 
 
 def get_auth_context(request: Request, db: DbSession = Depends(get_db)) -> AuthContext:
@@ -24,7 +31,13 @@ def get_auth_context(request: Request, db: DbSession = Depends(get_db)) -> AuthC
 def require_csrf(request: Request, context: AuthContext = Depends(get_auth_context)) -> AuthContext:
     header = request.headers.get("x-csrf-token")
     cookie = request.cookies.get(get_settings().csrf_cookie)
-    if not header or not cookie or not secrets.compare_digest(header, cookie):
+    if (
+        not header
+        or not cookie
+        or not header.isascii()
+        or not cookie.isascii()
+        or not secrets.compare_digest(header, cookie)
+    ):
         raise Forbidden("The request could not be verified. Refresh and try again.")
     if not verify_csrf(context.session, header):
         raise Forbidden("The request could not be verified. Refresh and try again.")
@@ -100,9 +113,21 @@ def role_dependency(*roles: str) -> Callable[..., AuthContext]:
     return dependency
 
 
-def enforce_origin(request: Request) -> None:
+def origin_allowed(request: Request) -> bool:
+    """Accept allowlisted origins, plus the API's own origin for local docs testing."""
     origin = request.headers.get("origin")
-    if origin and origin not in get_settings().cors_origin_list:
+    if not origin:
+        return True
+    settings = get_settings()
+    if origin in settings.cors_origin_list:
+        return True
+    if settings.docs_testing_enabled:
+        return origin == f"{request.url.scheme}://{request.url.netloc}"
+    return False
+
+
+def enforce_origin(request: Request) -> None:
+    if not origin_allowed(request):
         raise Forbidden("This origin is not allowed.")
 
 
@@ -147,6 +172,7 @@ __all__ = [
     "current_staff",
     "enforce_origin",
     "get_auth_context",
+    "origin_allowed",
     "require_agency",
     "require_candidate",
     "require_csrf",

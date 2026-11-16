@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
 from .common import new_id, utcnow
-from .users_model import User  # noqa: F401  (relationship target)
+from .users_model import Agency, User
 
 
 class Job(Base):
@@ -27,6 +27,8 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
+    agency: Mapped[Agency] = relationship()
+
 
 class Application(Base):
     __tablename__ = "applications"
@@ -43,3 +45,4 @@ class Application(Base):
 
     job: Mapped[Job] = relationship()
     candidate: Mapped[User] = relationship(foreign_keys=[candidate_id])
+    agency: Mapped[Agency] = relationship()

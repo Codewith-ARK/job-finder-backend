@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import EmailStr, Field
+from pydantic import EmailStr, Field, field_validator
 
 from .common import ApiModel
 
@@ -68,6 +68,15 @@ class MemberCreateInput(ApiModel):
     role: TeamRole
     team: str = Field(min_length=1, max_length=120)
 
+    @field_validator("name", "team", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("This field is required.")
+        return value
+
 
 class MemberCreatedOut(ApiModel):
     workspace: StaffWorkspaceOut
@@ -78,3 +87,12 @@ class MemberPatch(ApiModel):
     role: TeamRole | None = None
     team: str | None = Field(default=None, max_length=120)
     active: bool | None = None
+
+    @field_validator("team", mode="before")
+    @classmethod
+    def validate_team(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("Choose a team name.")
+        return value

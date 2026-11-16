@@ -1,19 +1,23 @@
-import hashlib
-import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 
-from pwdlib import PasswordHash
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
-from ..models import Agency, AuthSession, CandidateProfile, Membership, OnboardingStep, User
+from ..models import (
+    Agency,
+    AuthSession,
+    CandidateAssignment,
+    Membership,
+    User,
+)
 from ..models.common import utcnow
 from ..schemas.auth_schema import AgencyOut, DemoPersonaOut, SessionOut, SessionUserOut
-from .errors import Conflict, Forbidden, NotFound, Unauthorized
-
-password_hash = PasswordHash.recommended()
+from ..throttle import login_throttle
+from . import candidates_service, referrals_service
+from .credentials import hash_password, hash_secret, new_secret, verify_password
+from .errors import Conflict, Forbidden, NotFound, RateLimited, Unauthorized
 
 ROLE_LABELS = {
     "candidate": "Candidate",
@@ -21,6 +25,8 @@ ROLE_LABELS = {
     "supervisor": "Supervisor",
     "platform_admin": "Platform",
 }
+
+DUMMY_PASSWORD_HASH = hash_password(new_secret())
 ROLE_WORKSPACES = {
     "candidate": "candidate",
     "employee": "staff",
@@ -34,24 +40,6 @@ ROLE_DESCRIPTIONS = {
     "platform_admin": "A foundation for the future platform administration experience.",
 }
 
-ONBOARDING = (
-    (
-        "profile",
-        "Complete your profile",
-        "Help your team understand where you want to go next.",
-    ),
-    (
-        "preferences",
-        "Set your preferences",
-        "Tell us what kind of opportunity feels right.",
-    ),
-    (
-        "documents",
-        "Add your documents",
-        "Keep your CV and supporting documents in one place.",
-    ),
-)
-
 
 @dataclass
 class AuthContext:
@@ -60,27 +48,8 @@ class AuthContext:
     agency: Agency | None
 
 
-def hash_secret(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def hash_password(value: str) -> str:
-    return password_hash.hash(value)
-
-
-def verify_password(value: str, stored: str) -> bool:
-    return password_hash.verify(value, stored)
-
-
 def normalize_email(email: str) -> str:
     return email.strip().lower()
-
-
-def default_agency(db: DbSession) -> Agency:
-    agency = db.scalar(select(Agency).where(Agency.slug == get_settings().default_agency_slug))
-    if not agency:
-        raise NotFound("The default agency is not configured.")
-    return agency
 
 
 def active_memberships(db: DbSession, user_id: str) -> list[Membership]:
@@ -93,33 +62,12 @@ def active_memberships(db: DbSession, user_id: str) -> list[Membership]:
     )
 
 
-def bootstrap_candidate(db: DbSession, user: User, agency: Agency) -> CandidateProfile:
-    profile = CandidateProfile(
-        user_id=user.id,
-        agency_id=agency.id,
-        headline="",
-        location="",
-        skills=[],
-    )
-    db.add(profile)
-    for position, (key, _title, _description) in enumerate(ONBOARDING):
-        db.add(
-            OnboardingStep(
-                candidate_id=user.id,
-                key=key,
-                position=position,
-                status="next" if position == 0 else "upcoming",
-            )
-        )
-    return profile
-
-
 def create_session(
     db: DbSession, user: User, active_agency_id: str | None
 ) -> tuple[AuthSession, str, str]:
     settings = get_settings()
-    token = secrets.token_urlsafe(32)
-    csrf = secrets.token_urlsafe(32)
+    token = new_secret()
+    csrf = new_secret()
     record = AuthSession(
         user_id=user.id,
         token_hash=hash_secret(token),
@@ -132,6 +80,16 @@ def create_session(
     return record, token, csrf
 
 
+def _membership_for_agency(db: DbSession, user_id: str, agency_id: str) -> Membership | None:
+    return db.scalar(
+        select(Membership).where(
+            Membership.user_id == user_id,
+            Membership.agency_id == agency_id,
+            Membership.active.is_(True),
+        )
+    )
+
+
 def resolve_session(db: DbSession, token: str | None) -> AuthContext | None:
     if not token:
         return None
@@ -142,22 +100,29 @@ def resolve_session(db: DbSession, token: str | None) -> AuthContext | None:
     if not user or not user.is_active:
         return None
     agency = db.get(Agency, record.active_agency_id) if record.active_agency_id else None
-    if user.role != "platform_admin":
-        if not agency or agency.status != "active":
+
+    if user.role == "platform_admin":
+        return AuthContext(user=user, session=record, agency=None)
+
+    if user.role == "candidate":
+        # Independent candidates have no agency. Referred candidates carry an agency
+        # context and must still hold an active membership in it.
+        if agency is None:
+            return AuthContext(user=user, session=record, agency=None)
+        if agency.status != "active" or not _membership_for_agency(db, user.id, agency.id):
             return None
-        membership = db.scalar(
-            select(Membership).where(
-                Membership.user_id == user.id,
-                Membership.agency_id == agency.id,
-                Membership.active.is_(True),
-            )
-        )
-        if not membership:
-            return None
+        return AuthContext(user=user, session=record, agency=agency)
+
+    if not agency or agency.status != "active":
+        return None
+    if not _membership_for_agency(db, user.id, agency.id):
+        return None
     return AuthContext(user=user, session=record, agency=agency)
 
 
 def verify_csrf(record: AuthSession, token: str) -> bool:
+    import secrets
+
     return secrets.compare_digest(record.csrf_hash, hash_secret(token))
 
 
@@ -186,6 +151,8 @@ def _resolve_login_agency(
     if user.role == "platform_admin":
         return None
     memberships = active_memberships(db, user.id)
+    if user.role == "candidate" and not memberships and not requested_agency_id:
+        return None
     if not memberships:
         raise Forbidden("This account has no active agency membership.")
     if requested_agency_id:
@@ -194,18 +161,44 @@ def _resolve_login_agency(
         )
         if not membership:
             raise Forbidden("That agency is not part of this account.")
+        if not membership.agency or membership.agency.status != "active":
+            raise Forbidden("That agency is not active.")
         return membership.agency
-    return memberships[0].agency
+    eligible = [
+        membership
+        for membership in memberships
+        if membership.agency is not None and membership.agency.status == "active"
+    ]
+    if not eligible:
+        raise Forbidden("This account has no active agency membership.")
+    return eligible[0].agency
+
+
+def _reject_login(email: str) -> None:
+    login_throttle.fail(
+        login_throttle.key(email),
+        get_settings().login_max_failures,
+        get_settings().login_lockout_seconds,
+    )
 
 
 def login(
     db: DbSession, email: str, password: str, agency_id: str | None = None
 ) -> tuple[AuthContext, str, str]:
-    user = db.scalar(select(User).where(User.email == normalize_email(email)))
-    if not user or not verify_password(password, user.password_hash):
+    normalized = normalize_email(email)
+    key = login_throttle.key(normalized)
+    retry = login_throttle.retry_after(key)
+    if retry:
+        raise RateLimited("Too many failed sign-in attempts. Try again later.", retry)
+
+    user = db.scalar(select(User).where(User.email == normalized))
+    valid_password = verify_password(
+        password, user.password_hash if user else DUMMY_PASSWORD_HASH
+    )
+    if not user or not valid_password or not user.is_active:
+        _reject_login(normalized)
         raise Unauthorized("Email or password is incorrect.")
-    if not user.is_active:
-        raise Unauthorized("This account is not active.")
+    login_throttle.success(key)
     agency = _resolve_login_agency(db, user, agency_id)
     record, token, csrf = create_session(db, user, agency.id if agency else None)
     db.commit()
@@ -213,11 +206,21 @@ def login(
     return AuthContext(user=user, session=record, agency=agency), token, csrf
 
 
-def register(db: DbSession, name: str, email: str, password: str) -> tuple[AuthContext, str, str]:
+def register(
+    db: DbSession,
+    name: str,
+    email: str,
+    password: str,
+    referral_token: str | None = None,
+) -> tuple[AuthContext, str, str]:
     normalized = normalize_email(email)
     if db.scalar(select(User).where(User.email == normalized)):
         raise Conflict("An account with that email already exists.")
-    agency = default_agency(db)
+
+    resolved = referrals_service.resolve(db, referral_token) if referral_token else None
+    if resolved is not None and not resolved.valid:
+        raise Conflict(resolved.reason or "This referral link is not valid.")
+
     user = User(
         email=normalized,
         name=name.strip(),
@@ -226,9 +229,26 @@ def register(db: DbSession, name: str, email: str, password: str) -> tuple[AuthC
     )
     db.add(user)
     db.flush()
-    db.add(Membership(user_id=user.id, agency_id=agency.id, title="Candidate"))
-    bootstrap_candidate(db, user, agency)
-    record, token, csrf = create_session(db, user, agency.id)
+
+    agency: Agency | None = None
+    if referral_token:
+        link = referrals_service.consume(db, referral_token, user.id)
+        agency = link.agency
+        if not agency or agency.status != "active":
+            raise Conflict("That agency is not currently accepting referrals.")
+        db.add(Membership(user_id=user.id, agency_id=agency.id, title="Candidate"))
+        candidates_service.bootstrap_candidate(db, user, agency.id)
+        db.add(
+            CandidateAssignment(
+                agency_id=agency.id,
+                candidate_id=user.id,
+                member_id=link.created_by,
+            )
+        )
+    else:
+        candidates_service.bootstrap_candidate(db, user, None)
+
+    record, token, csrf = create_session(db, user, agency.id if agency else None)
     db.commit()
     return AuthContext(user=user, session=record, agency=agency), token, csrf
 
@@ -297,3 +317,17 @@ def change_password(
     ):
         record.revoked_at = utcnow()
     db.commit()
+
+
+def purge_sessions(db: DbSession, retention_days: int) -> int:
+    """Delete expired/revoked session rows older than the retention window."""
+    if retention_days < 0:
+        return 0
+    cutoff = utcnow() - timedelta(days=retention_days)
+    result = db.execute(
+        delete(AuthSession).where(
+            or_(AuthSession.expires_at < cutoff, AuthSession.revoked_at < cutoff)
+        )
+    )
+    db.commit()
+    return int(result.rowcount or 0)

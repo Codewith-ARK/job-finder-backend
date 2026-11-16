@@ -1,6 +1,6 @@
 # Backend context
 
-**Current priority:** verified local production prototype. **Architecture:** approved simple MVC. Authentication, role/agency authorization, persistence, migrations, seed data, and all four domain APIs are implemented and tested. Docker/PostgreSQL deployment is authored but unexecuted locally.
+**Current priority:** F03 security and deployment hardening is implemented and verified on SQLite; PostgreSQL container verification is the remaining blocker. The next feature is assigned from `docs/FEATURE_TRACKER.md`. **Architecture:** approved simple MVC. Authentication, role/agency authorization, persistence, migrations, seed data, candidate independence, referrals, resumable onboarding, abuse controls, and hardened container configuration are implemented and tested. Docker/PostgreSQL deployment is authored but unexecuted locally.
 
 ## Responsibility
 
@@ -38,3 +38,58 @@ After T00, record actual runtime/tooling, implemented endpoints, database/migrat
 - **Deployment:** `compose.yaml` (PostgreSQL 17 + API), `Dockerfile`, `.dockerignore`, and `.env.example`. The API container runs migrations before uvicorn.
 - **Verified:** `uv run pytest -q` → 18 passed, covering login/logout, cookie clearing, password revocation, CSRF/origin denial, role and cross-agency access, onboarding order, assignment/team/job/application flows, document signature validation, and migration up/down. `uv run ruff check .` clean. Local API smoke-tested through the frontend proxy with seeded accounts.
 - **Blocked:** Docker and PostgreSQL are unavailable on this workstation. The Compose/PostgreSQL path and container restart persistence have not been executed; SQLite uses the same models and migrations for local verification.
+
+## F01 implementation evidence (12 November 2026)
+
+- **Status:** Done. Acceptance criteria and task evidence are in
+  [docs/FEATURE_TRACKER.md](docs/FEATURE_TRACKER.md); the delivered contract is `PLAN.md` § F01.
+- **Migration:** `c4a9f1b2d7e8` makes `candidate_profiles.agency_id` nullable and adds
+  `candidate_preferences`, `candidate_experiences`, `candidate_education`, `candidate_skills`,
+  and `referral_links`. `uv run alembic upgrade head` and the up/down test pass on a disposable
+  SQLite database.
+- **Candidate APIs:** `/candidates/me` returns profile, preferences, experiences, education,
+  skills, onboarding steps, documents, completion, and referral context. `PUT
+  /candidates/me/onboarding/{personal|professional|academic}` accepts partial saves;
+  `POST /candidates/me/onboarding/{stepId}/complete` enforces `personal → professional →
+  academic → documents`, and the documents completion call finishes onboarding at 100%.
+- **Auth:** registration accepts an optional `referralToken`. Independent registration creates a
+  candidate with no membership; referral registration consumes the link atomically and creates
+  the membership, candidate profile, and assignment to the referrer. Sessions for candidates may
+  have `agency: null`; staff still require an active membership.
+- **Referrals:** public `GET /referrals/{token}` describes a link without consuming it. Staff
+  create/list/revoke links; employees manage their own, supervisors see the active agency's.
+  Used, expired, revoked, and unknown tokens resolve as invalid and registration returns `409`.
+- **Jobs:** independent candidates see open roles across active agencies; referred candidates see
+  their agency's roles. Application output includes `jobTitle`, `company`, and `agencyName`, and
+  staff queries exclude independent candidates.
+- **Configuration:** startup logs every unsafe/ambiguous setting; `CORS_ORIGINS=*` aborts startup.
+  `DOCS_TESTING_ENABLED=true` keeps `/docs` testable locally with a CSRF-aware interceptor.
+- **Verified:** `uv run ruff check .` clean; `uv run pytest -q` → 29 passed. End-to-end HTTP smoke
+  against a fresh migrated database → 34/34 checks (individual and referral signup, resume,
+  completion, upload, apply, CSRF, wrong role, cross-agency denial, staff visibility, revoke).
+- **Blocked:** Docker/PostgreSQL remains unexecuted on this workstation.
+
+## F03 implementation evidence (13 November 2026)
+
+- **Status:** Implementation and SQLite verification complete; PostgreSQL/container verification
+  is the remaining blocked criterion. Findings and per-item notes are in `BUGS.md`.
+- **Security fixes:** failed-login lockout and per-IP auth/registration limits (`throttle.py`,
+  `request_guards.py`); production configuration refusal; suspended-agency login and referral
+  rejection; inactive-referrer rejection; onboarding gate on apply; step invalidation on save or
+  document deletion; multi-agency role-change denial; last-supervisor guard; document structural
+  validation, quota enforcement, and filesystem/database compensation; bounded activity text and
+  workspace reads; blank-input rejection; stable experience/education IDs; `IntegrityError` → 409;
+  startup session purge; `/api/ready`; HSTS, CSP, Permissions-Policy, CORP, and trusted-host
+  handling.
+- **Migration:** additive `a7d2e5c91f04` adds workspace/session indexes (jobs, applications,
+  activities, auth_sessions, memberships, candidate_assignments, referral_links). Upgrade and
+  downgrade pass in the disposable SQLite migration test.
+- **Deployment:** the image runs as an unprivileged user with a `/api/ready` healthcheck; uvicorn
+  trusts only `FORWARDED_ALLOW_IPS`. PostgreSQL has no published port; the API publishes on
+  loopback. `compose.production.yaml` requires `CORS_ORIGINS`, `TRUSTED_HOSTS`, `HSTS_SECONDS`,
+  and `FORWARDED_ALLOW_IPS`, and forces secure cookies with demo/seed/docs disabled.
+- **Verified:** `uv run ruff check .` clean; `uv run pytest -q` → 74 passed, including the new
+  hardening, upload-integrity, quota, and migration-index checks.
+- **Blocked:** Docker and PostgreSQL are unavailable here. The Compose/PostgreSQL path, the
+  populated-migration findings BUG-003/004/005, and edge proxy behaviour remain unverified and are
+  recorded deployment prerequisites.

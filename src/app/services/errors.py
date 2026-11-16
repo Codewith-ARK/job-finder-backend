@@ -25,3 +25,9 @@ class NotFound(ServiceError):
 class Conflict(ServiceError):
     def __init__(self, message: str) -> None:
         super().__init__(message, 409)
+
+
+class RateLimited(ServiceError):
+    def __init__(self, message: str, retry_after: int) -> None:
+        super().__init__(message, 429)
+        self.retry_after = retry_after

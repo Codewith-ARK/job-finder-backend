@@ -46,7 +46,9 @@ def read_demo_personas(db: DbSession = Depends(get_db)) -> list[DemoPersonaOut]:
 def register(
     payload: RegisterInput, response: Response, db: DbSession = Depends(get_db)
 ) -> SessionOut:
-    context, token, csrf = auth_service.register(db, payload.name, payload.email, payload.password)
+    context, token, csrf = auth_service.register(
+        db, payload.name, payload.email, payload.password, payload.referral_token
+    )
     set_session_cookies(response, token, csrf)
     return auth_service.session_out(db, context)
 

@@ -10,12 +10,20 @@ from .auth_schema import (
     SessionUserOut,
 )
 from .candidates_schema import (
+    AcademicStepInput,
     CandidateWorkspaceOut,
     DocumentOut,
+    EducationInput,
+    EducationOut,
+    ExperienceInput,
+    ExperienceOut,
     OnboardingStepOut,
-    PreferencesPatch,
+    PersonalStepInput,
+    PreferenceInput,
+    PreferenceOut,
+    ProfessionalStepInput,
     ProfileOut,
-    ProfilePatch,
+    ReferralContextOut,
 )
 from .jobs_schema import (
     ApplicationOut,
@@ -33,6 +41,12 @@ from .platform_schema import (
     PlatformStatsOut,
     PlatformWorkspaceOut,
 )
+from .referrals_schema import (
+    ReferralCreatedOut,
+    ReferralCreateInput,
+    ReferralLinkOut,
+    ReferralResolveOut,
+)
 from .staff_schema import (
     ActivityOut,
     AssignmentInput,
@@ -47,6 +61,7 @@ from .staff_schema import (
 )
 
 __all__ = [
+    "AcademicStepInput",
     "ActivityOut",
     "AgencyOut",
     "AgencyStatusInput",
@@ -59,6 +74,10 @@ __all__ = [
     "DemoLoginInput",
     "DemoPersonaOut",
     "DocumentOut",
+    "EducationInput",
+    "EducationOut",
+    "ExperienceInput",
+    "ExperienceOut",
     "IntegrationOut",
     "JobInput",
     "JobOut",
@@ -70,12 +89,19 @@ __all__ = [
     "MemberPatch",
     "OnboardingStepOut",
     "PasswordChangeInput",
+    "PersonalStepInput",
     "PlatformAgencyOut",
     "PlatformStatsOut",
     "PlatformWorkspaceOut",
-    "PreferencesPatch",
+    "PreferenceInput",
+    "PreferenceOut",
+    "ProfessionalStepInput",
     "ProfileOut",
-    "ProfilePatch",
+    "ReferralContextOut",
+    "ReferralCreateInput",
+    "ReferralCreatedOut",
+    "ReferralLinkOut",
+    "ReferralResolveOut",
     "RegisterInput",
     "SessionOut",
     "SessionUserOut",

@@ -3,6 +3,7 @@ from . import (
     candidates_controller,
     jobs_controller,
     platform_controller,
+    referrals_controller,
     staff_controller,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "candidates_controller",
     "jobs_controller",
     "platform_controller",
+    "referrals_controller",
     "staff_controller",
 ]

@@ -2,7 +2,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import selectinload
 
-from ..models import Activity, Application, Job, User
+from ..config import get_settings
+from ..models import Activity, Agency, Application, Job, User
 from ..models.common import utcnow
 from ..schemas.jobs_schema import (
     ApplicationOut,
@@ -12,7 +13,9 @@ from ..schemas.jobs_schema import (
     JobPatch,
     JobsWorkspaceOut,
 )
+from . import candidates_service
 from .errors import Conflict, NotFound
+from .text import MAX_ACTIVITY_DETAIL, MAX_ACTIVITY_TITLE, clip
 
 NEXT_STEPS = {
     "submitted": "The team will review your application",
@@ -26,6 +29,7 @@ NEXT_STEPS = {
 def _job_out(job: Job) -> JobOut:
     return JobOut(
         id=job.id,
+        agency_name=job.agency.name if job.agency else "",
         title=job.title,
         company=job.company,
         location=job.location,
@@ -42,6 +46,11 @@ def _application_out(application: Application) -> ApplicationOut:
     return ApplicationOut(
         id=application.id,
         job_id=application.job_id,
+        job_title=application.job.title if application.job else "Role unavailable",
+        company=application.job.company if application.job else "",
+        agency_name=(
+            application.job.agency.name if application.job and application.job.agency else ""
+        ),
         candidate_id=application.candidate_id,
         candidate_name=application.candidate.name if application.candidate else "Candidate",
         status=application.status,
@@ -51,19 +60,39 @@ def _application_out(application: Application) -> ApplicationOut:
     )
 
 
-def workspace(db: DbSession, agency_id: str, user: User) -> JobsWorkspaceOut:
-    job_query = select(Job).where(Job.agency_id == agency_id)
-    if user.role == "candidate":
-        job_query = job_query.where(Job.status == "open")
-    jobs = list(db.scalars(job_query.order_by(Job.created_at.desc())))
+def workspace(db: DbSession, agency_id: str | None, user: User) -> JobsWorkspaceOut:
+    limit = get_settings().max_workspace_items
+    if user.role == "candidate" and agency_id is None:
+        # Independent candidates browse every open role from active agencies.
+        job_query = (
+            select(Job)
+            .join(Agency, Agency.id == Job.agency_id)
+            .options(selectinload(Job.agency))
+            .where(Job.status == "open", Agency.status == "active")
+        )
+    else:
+        job_query = (
+            select(Job)
+            .options(selectinload(Job.agency))
+            .where(Job.agency_id == agency_id)
+        )
+        if user.role == "candidate":
+            job_query = job_query.where(Job.status == "open")
+    jobs = list(db.scalars(job_query.order_by(Job.created_at.desc()).limit(limit)))
     application_query = (
         select(Application)
-        .options(selectinload(Application.candidate))
-        .where(Application.agency_id == agency_id)
+        .options(
+            selectinload(Application.candidate),
+            selectinload(Application.job).selectinload(Job.agency),
+        )
     )
     if user.role == "candidate":
         application_query = application_query.where(Application.candidate_id == user.id)
-    applications = list(db.scalars(application_query.order_by(Application.updated_at.desc())))
+    else:
+        application_query = application_query.where(Application.agency_id == agency_id)
+    applications = list(
+        db.scalars(application_query.order_by(Application.updated_at.desc()).limit(limit))
+    )
     return JobsWorkspaceOut(
         jobs=[_job_out(job) for job in jobs],
         applications=[_application_out(item) for item in applications],
@@ -82,8 +111,8 @@ def _log(
         Activity(
             agency_id=agency_id,
             actor_id=actor_id,
-            title=title,
-            detail=detail,
+            title=clip(title, MAX_ACTIVITY_TITLE),
+            detail=clip(detail, MAX_ACTIVITY_DETAIL),
             tone=tone,
         )
     )
@@ -132,10 +161,18 @@ def update_job(
     return workspace(db, agency_id, actor)
 
 
-def apply_to_job(db: DbSession, agency_id: str, candidate: User, job_id: str) -> JobsWorkspaceOut:
-    job = _job_in_agency(db, agency_id, job_id)
-    if job.status != "open":
+def apply_to_job(
+    db: DbSession, candidate: User, job_id: str, agency_id: str | None
+) -> JobsWorkspaceOut:
+    job = db.get(Job, job_id)
+    if job and agency_id is not None and job.agency_id != agency_id:
+        raise NotFound("That job is no longer available.")
+    if not job or job.status != "open":
         raise Conflict("That role is no longer accepting applications.")
+    if not job.agency or job.agency.status != "active":
+        raise Conflict("That agency is not currently accepting applications.")
+    if not candidates_service.onboarding_complete(db, candidate.id):
+        raise Conflict("Complete your onboarding before applying to roles.")
     existing = db.scalar(
         select(Application).where(
             Application.job_id == job.id,
@@ -146,7 +183,7 @@ def apply_to_job(db: DbSession, agency_id: str, candidate: User, job_id: str) ->
         raise Conflict("You have already applied to this role.")
     db.add(
         Application(
-            agency_id=agency_id,
+            agency_id=job.agency_id,
             job_id=job.id,
             candidate_id=candidate.id,
             status="submitted",
@@ -155,7 +192,7 @@ def apply_to_job(db: DbSession, agency_id: str, candidate: User, job_id: str) ->
     )
     _log(
         db,
-        agency_id,
+        job.agency_id,
         candidate.id,
         f"{candidate.name} applied to {job.title}",
         job.company,

@@ -1,6 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
+from ..config import get_settings
 from ..models import Agency, AuditEvent, Integration, Membership, User
 from ..schemas.platform_schema import (
     AgencyStatusInput,
@@ -14,17 +15,22 @@ from .errors import NotFound
 
 
 def workspace(db: DbSession) -> PlatformWorkspaceOut:
-    agencies = list(db.scalars(select(Agency).order_by(Agency.name)))
-    integrations = list(db.scalars(select(Integration).order_by(Integration.name)))
+    limit = get_settings().max_workspace_items
+    agencies = list(db.scalars(select(Agency).order_by(Agency.name).limit(limit)))
+    integrations = list(
+        db.scalars(select(Integration).order_by(Integration.name).limit(limit))
+    )
     connected = sum(1 for item in integrations if item.status == "connected")
+    counts = dict(
+        db.execute(
+            select(Membership.agency_id, func.count(Membership.id))
+            .where(Membership.active.is_(True))
+            .group_by(Membership.agency_id)
+        ).all()
+    )
     agencies_out = []
     for agency in agencies:
-        users = db.scalar(
-            select(func.count(Membership.id)).where(
-                Membership.agency_id == agency.id,
-                Membership.active.is_(True),
-            )
-        )
+        users = counts.get(agency.id, 0)
         agencies_out.append(
             PlatformAgencyOut(
                 id=agency.id,
