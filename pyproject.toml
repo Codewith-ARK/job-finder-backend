@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.16.2",
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.1.8",
+    "uvicorn[standard]>=0.54.0",
     "vercel-blob>=0.6.0",
 ]
 
@@ -48,3 +49,6 @@ ignore = ["B008"]  # FastAPI dependency injection uses call expressions as defau
 
 [tool.ruff.lint.per-file-ignores]
 "tests/conftest.py" = ["E402"]  # Environment must be set before app imports.
+
+[tool.vercel]
+entrypoint = "src.app.main:app"

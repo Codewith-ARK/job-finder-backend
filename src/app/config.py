@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     app_environment: Literal["development", "test", "production"] = "development"
     api_prefix: str = "/api"
     database_url: str = "sqlite:///./data/jobfinder.db"
+    blob_store_id: str | None = None
+    blob_read_write_token: str | None = None
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Comma-separated host names accepted by TrustedHostMiddleware. Empty keeps
     # the framework default (no host filtering) for local development.
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
 
     demo_login_enabled: bool = False
     default_agency_slug: str = "northstar"
-    seed_on_startup: bool = True
+    seed_on_startup: bool = False
     referral_expiry_days: int = 7
 
     max_upload_bytes: int = 4 * 1024 * 1024

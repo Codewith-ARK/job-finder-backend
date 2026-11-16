@@ -51,6 +51,7 @@ Demo sign-in is disabled unless `DEMO_LOGIN_ENABLED=true`. The frontend `/demo` 
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | SQLAlchemy URL. Compose uses `postgresql+psycopg://...`; local default is `sqlite:///./data/jobfinder.db` |
+| `BLOB_STORE_ID` / `BLOB_READ_WRITE_TOKEN` | Vercel Blob store identity and read-write credential for private documents |
 | `APP_ENVIRONMENT` | `development`, `test`, or `production`; production refuses unsafe settings |
 | `CORS_ORIGINS` | Comma-separated allowed browser origins, also enforced against `Origin` on state changes |
 | `TRUSTED_HOSTS` | Comma-separated `Host` allowlist; empty disables host filtering |

@@ -69,6 +69,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-multipart" },
     { name = "sqlalchemy" },
+    { name = "uvicorn", extra = ["standard"] },
     { name = "vercel-blob" },
 ]
 
@@ -88,6 +89,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.16.2" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "sqlalchemy", specifier = ">=2.1.8" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
     { name = "vercel-blob", specifier = ">=0.6.0" },
 ]
 
