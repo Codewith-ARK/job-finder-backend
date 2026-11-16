@@ -1,7 +1,6 @@
-from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from sqlalchemy.orm import Session as DbSession
 from starlette.concurrency import run_in_threadpool
 
@@ -14,7 +13,7 @@ from ..schemas.candidates_schema import (
     ProfessionalStepInput,
 )
 from ..security import current_candidate, require_candidate
-from ..services import candidates_service
+from ..services import candidates_service, storage
 from ..services.errors import NotFound
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
@@ -82,7 +81,7 @@ async def upload_document(
 
 @router.get(
     "/me/documents/{document_id}",
-    response_class=FileResponse,
+    response_class=Response,
     responses={
         200: {
             "content": {
@@ -96,12 +95,19 @@ def download_document(
     document_id: str,
     context=Depends(current_candidate),
     db: DbSession = Depends(get_db),
-) -> FileResponse:
+) -> Response:
     document = candidates_service.get_document(db, context.user, document_id)
-    path = Path(document.storage_path)
-    if not path.exists():
-        raise NotFound("The stored document could not be found.")
-    return FileResponse(path, filename=document.filename, media_type=document.content_type)
+    try:
+        content, content_type = storage.download(document.blob_pathname)
+    except FileNotFoundError as exc:
+        raise NotFound("The stored document could not be found.") from exc
+    return Response(
+        content=content,
+        media_type=content_type or document.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(document.filename)}"
+        },
+    )
 
 
 @router.delete("/me/documents/{document_id}", response_model=CandidateWorkspaceOut)

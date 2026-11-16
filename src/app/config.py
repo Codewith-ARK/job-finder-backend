@@ -1,5 +1,4 @@
 from functools import lru_cache
-from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -35,8 +34,7 @@ class Settings(BaseSettings):
     seed_on_startup: bool = True
     referral_expiry_days: int = 7
 
-    document_dir: str = "storage/documents"
-    max_upload_bytes: int = 10 * 1024 * 1024
+    max_upload_bytes: int = 4 * 1024 * 1024
     max_json_bytes: int = Field(default=256 * 1024, ge=1024, le=1024 * 1024)
     requests_per_minute: int = Field(default=120, ge=1, le=10000)
     auth_requests_per_minute: int = Field(default=20, ge=1, le=1000)
@@ -57,11 +55,6 @@ class Settings(BaseSettings):
     @property
     def trusted_host_list(self) -> list[str]:
         return [host.strip() for host in self.trusted_hosts.split(",") if host.strip()]
-
-    @property
-    def document_path(self) -> Path:
-        return Path(self.document_dir).resolve()
-
 
 @lru_cache
 def get_settings() -> Settings:
@@ -184,6 +177,12 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
                 "warning",
                 "HSTS_SECONDS=0: enable HSTS only after the public HTTPS origin is verified.",
             )
+        )
+    if settings.app_environment == "production" and settings.database_url.lower().startswith(
+        "sqlite"
+    ):
+        problems.append(
+            ("error", "Production requires an external database; SQLite is not supported.")
         )
     if settings.session_cookie == settings.csrf_cookie:
         problems.append(("error", "Session and CSRF cookies must have distinct names."))

@@ -1,5 +1,4 @@
 from datetime import timedelta
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
-from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
 from app.models import Agency, Application, AuthSession, Membership, User
@@ -380,8 +378,9 @@ def test_unexpected_integrity_error_returns_conflict(monkeypatch):
     assert response.json()["detail"]
 
 
-def test_upload_removes_the_file_when_the_database_write_fails(sign_in, monkeypatch):
-    client, csrf, session = sign_in("Aya Khan")
+def test_upload_removes_the_blob_when_the_database_write_fails(sign_in, monkeypatch, fake_blob):
+    client, csrf, _ = sign_in("Aya Khan")
+    seeded_blobs = set(fake_blob)
 
     def fail(_self):
         raise RuntimeError("database unavailable")
@@ -394,5 +393,4 @@ def test_upload_removes_the_file_when_the_database_write_fails(sign_in, monkeypa
             headers={"X-CSRF-Token": csrf},
         )
 
-    folder = Path(get_settings().document_dir) / session["user"]["id"]
-    assert not folder.exists() or not any(folder.iterdir())
+    assert set(fake_blob) == seeded_blobs

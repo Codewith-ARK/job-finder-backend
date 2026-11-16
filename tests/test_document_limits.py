@@ -37,8 +37,6 @@ def test_long_filename_returns_validation_error(sign_in):
 
 
 def test_storage_extension_comes_from_type(sign_in):
-    from pathlib import Path
-
     from app.database import SessionLocal
     from app.models import Document
 
@@ -47,7 +45,7 @@ def test_storage_extension_comes_from_type(sign_in):
     assert response.status_code == 200
     with SessionLocal() as db:
         doc = db.get(Document, response.json()["documents"][0]["id"])
-        assert Path(doc.storage_path).suffix == ".pdf"
+        assert doc.blob_pathname.endswith(".pdf")
 
 
 def test_document_structure_must_match_its_type(sign_in):
