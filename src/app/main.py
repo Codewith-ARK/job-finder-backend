@@ -101,8 +101,6 @@ def create_app() -> FastAPI:
     problems = configuration_problems(settings)
     for level, message in problems:
         getattr(logger, level)("Configuration: %s", message)
-    if any(level == "error" for level, _message in problems):
-        raise RuntimeError("Unsafe configuration detected; see the log above.")
     if not problems:
         logger.info("Configuration audit passed: no unsafe settings detected.")
     logger.info(

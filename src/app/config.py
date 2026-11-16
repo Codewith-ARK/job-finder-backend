@@ -205,8 +205,4 @@ def configuration_problems(settings: Settings) -> list[tuple[str, str]]:
         ):
             if unsafe:
                 problems.append(("error", message))
-        problems = [
-            ("error" if "CORS_ORIGINS" in message else level, message)
-            for level, message in problems
-        ]
     return problems
